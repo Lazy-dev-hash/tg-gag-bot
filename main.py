@@ -32,7 +32,7 @@ TOKEN = os.environ.get('TELEGRAM_TOKEN')
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
 API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
 TRACKING_INTERVAL_SECONDS = 45
-MULTOMUSIC_URL = "https://www.youtube.com/watch?v=sPma_hV4_sU"
+MULTOMUSIC_URL = "https://youtu.be/Rht8rS4cR1s?si=ELIsHKV1Mzt8RyY2"
 
 PRIZED_ITEMS = ["master sprinkler", "beanstalk", "advanced sprinkler", "godly sprinkler", "ember lily"]
 
