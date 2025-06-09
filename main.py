@@ -22,17 +22,15 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '1.0.0')
+BOT_VERSION = os.environ.get('BOT_VERSION', '3.0.0') # Major update version
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
 API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
 TRACKING_INTERVAL_SECONDS = 45
 MULTOMUSIC_URL = "https://www.youtube.com/watch?v=sPma_hV4_sU"
+PRIZED_ITEMS = ["master sprinkler", "beanstalk", "advanced sprinkler", "godly sprinkler", "ember lily"]
 UPDATE_GIF_URL = "https://i.pinimg.com/originals/e5/22/07/e52207b837755b763b65b6302409feda.gif"
-
-# --- UPDATED PRIZED ITEM LIST ---
-PRIZED_ITEMS = ["master sprinkler", "godly sprinkler", "advanced sprinkler", "basic sprinkler", "beanstalk", "mushroom", "mythical egg", "legendary egg", "ember lily"]
 
 ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
 AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS = set(), set(), set(), set()
@@ -68,12 +66,12 @@ async def log_user_activity(user: User, command: str, bot: Bot):
     try:
         if user.id not in USER_INFO_CACHE:
             p_photos = await bot.get_user_profile_photos(user.id, limit=1)
-            avatar_path = (await p_photos.photos[0][0].get_file()).file_path if p_photos and p_photos.photos and p_photos.photos[0] else None
-            USER_INFO_CACHE[user.id] = {'first_name': user.first_name, 'username': user.username or "N/A", 'avatar_path': avatar_path}
+            avatar_url_path = (await p_photos.photos[0][0].get_file()).file_path if p_photos and p_photos.photos and p_photos.photos[0] else None
+            USER_INFO_CACHE[user.id] = {'first_name': user.first_name, 'username': user.username or "N/A", 'avatar_url_path': avatar_url_path}
         
         user_info = USER_INFO_CACHE[user.id]
-        avatar_url = f"https://api.telegram.org/file/bot{TOKEN}/{user_info['avatar_path']}" if user_info['avatar_path'] else "https://i.imgur.com/jpfrJd3.png"
-        activity_log = {"user_id": user.id, "first_name": user_info['first_name'], "username": user_info['username'], "command": command, "timestamp": datetime.now(pytz.utc), "avatar_url": avatar_url}
+        full_avatar_url = f"https://api.telegram.org/file/bot{TOKEN}/{user_info['avatar_url_path']}" if user_info['avatar_url_path'] else "https://i.imgur.com/jpfrJd3.png"
+        activity_log = {"user_id": user.id, "first_name": user_info['first_name'], "username": user_info['username'], "command": command, "timestamp": datetime.now(pytz.utc), "avatar_url": full_avatar_url}
         USER_ACTIVITY.insert(0, activity_log); del USER_ACTIVITY[50:]
         logger.info(f"Logged activity for {user.first_name}: {command}")
     except Exception as e: logger.warning(f"Could not log activity for {user.id}. Error: {e}")
@@ -136,26 +134,23 @@ async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TY
     try:
         while True:
             await asyncio.sleep(TRACKING_INTERVAL_SECONDS)
-            tracker_info = ACTIVE_TRACKERS.get(chat_id)
-            if not tracker_info: break
-            is_muted = tracker_info.get('is_muted', False)
+            tracker_info = ACTIVE_TRACKERS.get(chat_id); is_muted = tracker_info.get('is_muted', False) if tracker_info else True
             new_data = await fetch_all_data()
             if not new_data: continue
             old_data = LAST_SENT_DATA.get(chat_id, {"stock": {}})
-            old_prized = {item['name'].lower() for cat in old_data['stock'].values() for item in cat}
-            new_prized_items = [item for cat in new_data['stock'].values() for item in cat]
-            just_appeared_prized = [item for item in new_prized_items if item['name'].lower() in PRIZED_ITEMS and item['name'].lower() not in old_prized]
-
+            old_prized = {item['name'] for cat in old_data['stock'].values() for item in cat if item['name'].lower() in PRIZED_ITEMS}
+            new_prized = {item['name'] for cat in new_data['stock'].values() for item in cat if item['name'].lower() in PRIZED_ITEMS}
+            just_appeared_prized = new_prized - old_prized
             if just_appeared_prized and not is_muted:
-                alert_list = "\n".join([f"› {add_emoji(i['name'])}: {format_value(i['value'])}" for i in just_appeared_prized])
+                item_details = [item for cat in new_data['stock'].values() for item in cat if item['name'] in just_appeared_prized]
+                alert_list = "\n".join([f"› {add_emoji(i['name'])}: {format_value(i['value'])}" for i in item_details])
                 alert_message = f"🚨 <b>PRIZED ITEM ALERT!</b> 🚨\n\n{alert_list}"
                 try: await bot.send_message(chat_id, text=alert_message, parse_mode=ParseMode.HTML); await send_music_vm(context, chat_id)
                 except Exception as e: logger.error(f"Failed prized alert to {chat_id}: {e}")
-            
             for category_name, new_items in new_data["stock"].items():
                 old_items_set = {frozenset(item.items()) for item in old_data["stock"].get(category_name, [])}; new_items_set = {frozenset(item.items()) for item in new_items}
                 if old_items_set != new_items_set:
-                    if len(new_items_set - old_items_set) == 1 and any(item['name'].lower() in PRIZED_ITEMS for item in new_items): continue
+                    if len(new_items_set - old_items_set) == 1 and any(item['name'] in just_appeared_prized for item in new_items): continue
                     if not is_muted:
                         items_to_show = [item for item in new_items if not filters or any(f in item['name'].lower() for f in filters)]
                         if items_to_show:
@@ -171,7 +166,60 @@ async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TY
         if chat_id in LAST_SENT_DATA: del LAST_SENT_DATA[chat_id]
 
 # --- AESTHETIC HTML TEMPLATES ---
-DASHBOARD_HTML = """<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Bot Dashboard</title><script src="https://cdn.jsdelivr.net/npm/tsparticles-slim@2.12.0/tsparticles.slim.bundle.min.js"></script><style>:root{--bg:#0d1117;--primary:#c9a4ff;--secondary:#58a6ff;--surface:#161b22;--on-surface:#e6edf3;--border:#30363d;--red:#f85149;}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background-color:var(--bg);color:var(--on-surface);margin:0;padding:1.5rem;overflow-x:hidden;}#tsparticles{position:fixed;top:0;left:0;width:100%;height:100%;z-index:-1;}.container{max-width:1200px;margin:auto;animation:fadeIn 0.8s ease-out;}.header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:1rem;margin-bottom:2rem;}h1, h2{font-weight:600;color:white;letter-spacing:-1px;}h1{margin:0;font-size:1.8rem;} h2{border-bottom:1px solid var(--border);padding-bottom:10px;margin:2.5rem 0 1.5rem 0;}h2 i{margin-right:0.5rem;color:var(--primary);}.logout-btn{color:var(--red);text-decoration:none;background-color:rgba(248,81,73,0.1);padding:10px 15px;border-radius:6px;border:1px solid var(--red);font-weight:500;transition:all 0.2s;}.logout-btn:hover{background-color:rgba(248,81,73,0.2);transform:translateY(-2px);}.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1.5rem;margin-bottom:2.5rem;}.stat-card{background:linear-gradient(145deg,rgba(255,255,255,0.05),rgba(255,255,255,0));backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);padding:1.5rem;border-radius:12px;border:1px solid var(--border);display:flex;align-items:center;gap:1.5rem;transition:all 0.3s ease;}.stat-card:hover{transform:translateY(-5px);box-shadow:0 10px 20px rgba(0,0,0,0.2);}.stat-card .icon{font-size:1.8rem;color:var(--primary);background:linear-gradient(145deg,rgba(201,164,255,0.1),rgba(201,164,255,0.2));width:60px;height:60px;border-radius:50%;display:grid;place-items:center;}.stat-card .value{font-size:2.8rem;font-weight:700;color:white;} .stat-card .label{font-size:1rem;color:#8b949e;}.user-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1.5rem;}.user-card{background-color:var(--surface);border-radius:12px;border:1px solid var(--border);padding:1.5rem;display:flex;align-items:center;gap:1rem;transition:all 0.3s ease;}.user-card:hover{transform:translateY(-5px);box-shadow:0 10px 20px rgba(0,0,0,0.2);}.user-card img{width:50px;height:50px;border-radius:50%;border:2px solid var(--border);}.user-card .name{font-weight:600;color:white;} .user-card .username{color:#8b949e;font-size:0.9em;}.user-card .status{margin-left:auto;padding:5px 10px;border-radius:20px;font-size:0.8rem;font-weight:600;}.status.muted{background-color:rgba(248,81,73,0.1);color:var(--red);} .status.active{background-color:rgba(46,160,67,0.15);color:#3fb950;}.activity-log{background-color:var(--surface);border-radius:12px;border:1px solid var(--border);overflow:hidden;box-shadow:0 5px 15px rgba(0,0,0,0.1);}table{width:100%;border-collapse:collapse;}th,td{text-align:left;padding:16px 20px;}th{background-color:rgba(187,134,252,0.05);color:var(--primary);font-weight:600;text-transform:uppercase;font-size:0.8rem;letter-spacing:0.5px;}tbody tr{border-bottom:1px solid var(--border);transition:background-color 0.2s;}tbody tr:last-child{border-bottom:none;}tbody tr:hover{background-color:rgba(88,166,255,0.08);}.user-cell{display:flex;align-items:center;gap:15px;}.user-cell img{width:45px;height:45px;border-radius:50%;border:2px solid var(--border);}.user-cell .name{font-weight:600;color:white;}.user-cell .username{color:#8b949e;font-size:0.9em;}code{background-color:#2b2b2b;color:var(--secondary);padding:4px 8px;border-radius:4px;font-family:"SF Mono","Fira Code",monospace;}@keyframes fadeIn{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}@media(max-width:768px){body{padding:1rem;}.header,h1{flex-direction:column;gap:1rem;text-align:center;}.stats-grid,.user-grid{grid-template-columns:1fr;}h1{font-size:1.5rem;}.stat-card .value{font-size:2.2rem;}}</style><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"></head><body><div id="tsparticles"></div><div class="container"><div class="header"><h1><i class="fa-solid fa-shield-halved"></i> GAG Bot Dashboard</h1><a href="/logout" class="logout-btn"><i class="fa-solid fa-arrow-right-from-bracket"></i> Logout</a></div><div class="stats-grid"><div class="stat-card"><div class="icon"><i class="fa-solid fa-users"></i></div><div><div class="value" data-target="{{ stats.authorized_users }}">0</div><div class="label">Total Authorized Users</div></div></div><div class="stat-card"><div class="icon"><i class="fa-solid fa-user-shield"></i></div><div><div class="value" data-target="{{ stats.admins }}">0</div><div class="label">Admins</div></div></div></div><h2><i class="fa-solid fa-satellite-dish"></i> Active Trackers ({{ stats.active_trackers }})</h2><div class="user-grid">{% for user in active_users %}<div class="user-card"><img src="{{ user.avatar_url }}" alt="Avatar"><div><div class="name">{{ user.first_name }}</div><div class="username">@{{ user.username }}</div></div><div class="status {{ 'muted' if user.is_muted else 'active' }}">{{ 'MUTED' if user.is_muted else 'ACTIVE' }}</div></div>{% else %} <p>No users are currently tracking.</p> {% endfor %}</div><h2><i class="fa-solid fa-chart-line"></i> Recent Activity</h2><div class="activity-log"><table><thead><tr><th>User</th><th>Command</th><th>Time</th></tr></thead><tbody>{% for log in activity %}<tr><td><div class="user-cell"><img src="{{ log.avatar_url }}" alt="Avatar"><div><div class="name">{{ log.first_name }}</div><div class="username">@{{ log.username }}</div></div></div></td><td><code>{{ log.command }}</code></td><td>{{ log.time_ago }} ago</td></tr>{% endfor %}</tbody></table></div></div><script>document.addEventListener("DOMContentLoaded",function(){tsParticles.load("tsparticles",{preset:"stars",background:{color:{value:"#0d1117"}},particles:{color:{value:"#ffffff"},links:{color:"#ffffff",distance:150,enable:!0,opacity:.1,width:1},move:{enable:!0,speed:.5},number:{density:{enable:!0,area:800},value:40}}});document.querySelectorAll(".value").forEach(e=>{const t=+e.getAttribute("data-target"),o=()=>{const a=+e.innerText;if(a<t){e.innerText=`${Math.ceil(a+t/100)}`;setTimeout(o,20)}else{e.innerText=t}};o()})});</script></body></html>"""
+DASHBOARD_HTML = """
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Bot Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/tsparticles-slim@2.12.0/tsparticles.slim.bundle.min.js"></script>
+<style>
+:root{--bg:#0d1117;--primary:#c9a4ff;--secondary:#58a6ff;--surface:#161b22;--on-surface:#e6edf3;--border:#30363d;--red:#f85149;--green:#3fb950;}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background-color:var(--bg);color:var(--on-surface);margin:0;padding:1.5rem;overflow-x:hidden;}
+#tsparticles{position:fixed;top:0;left:0;width:100%;height:100%;z-index:-1;}
+.container{max-width:1200px;margin:auto;animation:fadeIn 0.8s ease-out;}
+.header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:1rem;margin-bottom:2rem;}
+h1,h2{font-weight:700;color:white;letter-spacing:-1px;}
+h1{margin:0;font-size:2rem;} h2{border-bottom:1px solid var(--border);padding-bottom:10px;margin:3rem 0 1.5rem 0;}
+h2 i{margin-right:0.75rem;color:var(--primary);}
+.logout-btn{color:var(--red);text-decoration:none;background-color:rgba(248,81,73,0.1);padding:10px 15px;border-radius:8px;border:1px solid var(--red);font-weight:600;transition:all 0.2s;}
+.logout-btn:hover{background-color:rgba(248,81,73,0.2);transform:translateY(-2px);}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1.5rem;margin-bottom:2.5rem;}
+.stat-card{background:linear-gradient(145deg,rgba(255,255,255,0.05),rgba(255,255,255,0));backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);padding:1.5rem;border-radius:12px;border:1px solid var(--border);display:flex;align-items:center;gap:1.5rem;transition:all 0.3s ease;}
+.stat-card:hover{transform:translateY(-5px);box-shadow:0 10px 20px rgba(0,0,0,0.2);}
+.stat-card .icon{font-size:2rem;color:var(--primary);background:linear-gradient(145deg,rgba(201,164,255,0.1),rgba(201,164,255,0.2));width:60px;height:60px;border-radius:50%;display:grid;place-items:center;}
+.stat-card .value{font-size:3rem;font-weight:800;color:white;} .stat-card .label{font-size:1rem;color:#8b949e;font-weight:500;}
+.user-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:1.5rem;}
+.user-card{background-color:var(--surface);border-radius:12px;border:1px solid var(--border);padding:1.5rem;display:flex;align-items:center;gap:1rem;transition:all 0.3s ease;}
+.user-card:hover{transform:translateY(-5px);box-shadow:0 10px 20px rgba(0,0,0,0.2);}
+.user-card img{width:60px;height:60px;border-radius:50%;border:2px solid var(--border);}
+.user-card .name{font-weight:600;font-size:1.1rem;color:white;} .user-card .username{color:#8b949e;font-size:0.9em;}
+.user-card .status{margin-left:auto;padding:5px 12px;border-radius:20px;font-size:0.8rem;font-weight:700;}
+.status.muted{background-color:rgba(248,81,73,0.1);color:var(--red);} .status.active{background-color:rgba(46,160,67,0.15);color:var(--green);}
+.activity-log{background-color:var(--surface);border-radius:12px;border:1px solid var(--border);overflow:hidden;box-shadow:0 5px 15px rgba(0,0,0,0.1);}
+table{width:100%;border-collapse:collapse;}
+th,td{text-align:left;padding:16px 20px;}
+th{background-color:rgba(187,134,252,0.05);color:var(--primary);font-weight:600;text-transform:uppercase;font-size:0.8rem;letter-spacing:0.5px;}
+tbody tr{border-bottom:1px solid var(--border);transition:background-color 0.2s;}
+tbody tr:last-child{border-bottom:none;}
+tbody tr:hover{background-color:rgba(88,166,255,0.08);}
+.user-cell{display:flex;align-items:center;gap:15px;}.user-cell img{width:45px;height:45px;border-radius:50%;border:2px solid var(--border);}
+.user-cell .name{font-weight:600;color:white;}.user-cell .username{color:#8b949e;font-size:0.9em;}
+code{background-color:#2b2b2b;color:var(--secondary);padding:4px 8px;border-radius:4px;font-family:"SF Mono","Fira Code",monospace;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
+@media(max-width:768px){body{padding:1rem;}.header,h1{flex-direction:column;gap:1rem;text-align:center;}.stats-grid,.user-grid{grid-template-columns:1fr;}h1{font-size:1.5rem;}.stat-card .value{font-size:2.2rem;}}
+</style>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"></head><body><div id="tsparticles"></div><div class="container">
+<div class="header"><h1><i class="fa-solid fa-shield-halved"></i> GAG Bot Dashboard</h1><a href="/logout" class="logout-btn"><i class="fa-solid fa-arrow-right-from-bracket"></i> Logout</a></div>
+<div class="stats-grid"><div class="stat-card"><div class="icon"><i class="fa-solid fa-users"></i></div><div><div class="value" data-target="{{ stats.authorized_users }}">0</div><div class="label">Authorized Users</div></div></div><div class="stat-card"><div class="icon"><i class="fa-solid fa-user-shield"></i></div><div><div class="value" data-target="{{ stats.admins }}">0</div><div class="label">Admins</div></div></div></div>
+<h2><i class="fa-solid fa-satellite-dish"></i> Active Trackers ({{ stats.active_trackers }})</h2>
+<div class="user-grid">{% for user in active_users %}<div class="user-card"><img src="{{ user.avatar_url }}" alt="Avatar"><div><div class="name">{{ user.first_name }}</div><div class="username">@{{ user.username }}</div></div><div class="status {{ 'muted' if user.is_muted else 'active' }}">{{ 'MUTED' if user.is_muted else 'ACTIVE' }}</div></div>{% else %} <p>No users are currently tracking.</p> {% endfor %}</div>
+<h2><i class="fa-solid fa-chart-line"></i> Recent Activity</h2>
+<div class="activity-log"><table><thead><tr><th>User</th><th>Command</th><th>Time</th></tr></thead><tbody>
+{% for log in activity %}<tr><td><div class="user-cell"><img src="{{ log.avatar_url }}" alt="Avatar"><div><div class="name">{{ log.first_name }}</div><div class="username">@{{ log.username }}</div></div></div></td><td><code>{{ log.command }}</code></td><td>{{ log.time_ago }} ago</td></tr>{% endfor %}
+</tbody></table></div></div>
+<script>
+document.addEventListener("DOMContentLoaded",function(){
+  tsParticles.load("tsparticles",{preset:"stars",background:{color:{value:"#0d1117"}},particles:{color:{value:"#ffffff"},links:{color:"#ffffff",distance:150,enable:true,opacity:0.1,width:1},move:{enable:true,speed:0.5},number:{density:{enable:true,area:800},value:40}}});
+  document.querySelectorAll('.value').forEach(counter=>{ const animate=()=>{const target=+counter.getAttribute('data-target');const data=+counter.innerText;const time=target/100;if(data<target){counter.innerText=`${Math.ceil(data+time)}`;setTimeout(animate,15)}else{counter.innerText=target}};animate();});
+});
+</script></body></html>"""
 LOGIN_HTML = """<!DOCTYPE html><html><head><title>Admin Login</title><style>:root{--bg:#0d1117;--primary:#c9a4ff;--surface:#161b22;--border:#21262d;--red:#f85149;}body{display:flex;justify-content:center;align-items:center;height:100vh;background-color:var(--bg);color:white;font-family:-apple-system,sans-serif;}.login-box{background-color:var(--surface);padding:40px;border-radius:12px;border:1px solid var(--border);text-align:center;width:340px;box-shadow:0 10px 30px rgba(0,0,0,0.2);animation:fadeIn 0.5s ease-out;}h2{color:var(--primary);margin-top:0;margin-bottom:25px;font-weight:600;letter-spacing:-0.5px;}input{width:100%;box-sizing:border-box;padding:14px;margin-bottom:15px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:white;font-size:1rem;transition:border-color 0.2s;}input:focus{border-color:var(--primary);outline:none;}button{width:100%;padding:14px;background:linear-gradient(90deg,var(--primary),#9a66e2);color:black;border:none;border-radius:8px;cursor:pointer;font-weight:bold;font-size:1rem;transition:all 0.2s;}button:hover{transform:translateY(-2px);box-shadow:0 4px 15px rgba(201,164,255,0.2);}.error{color:var(--red);background-color:rgba(248,81,73,0.1);padding:10px;border-radius:6px;margin-top:15px;border:1px solid var(--red);}@keyframes fadeIn{from{opacity:0;transform:scale(0.95);}to{opacity:1;transform:scale(1);}}</style></head><body><div class="login-box"><form method="post"><h2>Bot Dashboard Login</h2><input type="text" name="username" placeholder="Username" required><input type="password" name="password" placeholder="Password" required><button type="submit">Login</button>{% if error %}<p class="error">{{ error }}</p>{% endif %}</form></div></body></html>"""
 
 # --- FLASK WEB ROUTES ---
@@ -189,9 +237,10 @@ def dashboard_route():
     if not session.get('logged_in'): return redirect(url_for('login_route'))
     display_activity, active_users = [], []
     for user_id, tracker_data in ACTIVE_TRACKERS.items():
-        user_info = USER_INFO_CACHE.get(user_id, {})
-        avatar_url = f"https://api.telegram.org/file/bot{TOKEN}/{user_info.get('avatar_path')}" if user_info.get('avatar_path') else "https://i.imgur.com/jpfrJd3.png"
-        active_users.append({'first_name': user_info.get('first_name', f"User {user_id}"), 'username': user_info.get('username', 'N/A'), 'avatar_url': avatar_url, 'is_muted': tracker_data['is_muted']})
+        user_info = USER_INFO_CACHE.get(user_id)
+        if user_info:
+            full_avatar_url = f"https://api.telegram.org/file/bot{TOKEN}/{user_info['avatar_url_path']}" if user_info['avatar_url_path'] else "https://i.imgur.com/jpfrJd3.png"
+            active_users.append({**user_info, 'is_muted': tracker_data['is_muted'], 'avatar_url': full_avatar_url})
     for log in USER_ACTIVITY:
         time_diff = datetime.now(pytz.utc) - log['timestamp']
         if time_diff.total_seconds() < 60: time_ago = f"{int(time_diff.total_seconds())}s"
@@ -217,21 +266,20 @@ async def send_full_stock_report(update: Update, context: ContextTypes.DEFAULT_T
     await loader_message.delete()
     if sent_anything: await send_music_vm(context, update.effective_chat.id)
     return data
-
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if user.id in BANNED_USERS: await update.message.reply_text("❌ You have been banned from using this bot."); return
     await log_user_activity(user, "/start", context.bot)
+    if user.id in BANNED_USERS: await update.message.reply_text("❌ You have been banned from using this bot."); return
     if user.id not in AUTHORIZED_USERS:
         code = "GAG-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=3)) + '-' + ''.join(random.choices(string.ascii_uppercase + string.digits, k=3))
-        user_msg = f"👋 <b>Welcome! This is a private bot.</b>\n\nTo get access, send this code to the admin for approval:\n\n🔑 Approval Code: <code>{code}</code>"
-        admin_msg = f"👤 <b>New User Request</b>\n\n<b>Name:</b> {user.first_name}\n<b>User ID:</b> <code>{user.id}</code>\n\nTo approve, use: <code>/approve {user.id}</code>"
+        user_msg = f"👋 <b>Welcome! This is a private bot.</b>\n\nTo get access, send this code to an admin for approval:\n\n🔑 Approval Code: <code>{code}</code>"
+        admin_msg = f"👤 <b>New User Request</b>\n<b>Name:</b> {user.first_name}\n<b>User ID:</b> <code>{user.id}</code>\n\nTo approve, use: <code>/approve {user.id}</code>"
         await update.message.reply_html(user_msg)
         for admin_id in ADMIN_USERS:
             try: await context.bot.send_message(chat_id=admin_id, text=admin_msg, parse_mode=ParseMode.HTML)
             except Exception as e: logger.error(f"Failed to send approval notice to admin {admin_id}: {e}")
         return
-    if user.id in RESTRICTED_USERS: await update.message.reply_text("⚠️ Your account is restricted. You cannot start a tracker. Please contact an admin."); return
+    if user.id in RESTRICTED_USERS: await update.message.reply_text("⚠️ Your account is restricted. You can refresh stock but cannot start a new tracker. Please contact an admin."); return
     chat_id = user.id
     if chat_id in ACTIVE_TRACKERS: await update.message.reply_text("📡 Already tracking! Use /stop or /refresh."); return
     filters = [f.strip().lower() for f in " ".join(context.args).split('|') if f.strip()]
@@ -241,97 +289,103 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ACTIVE_TRACKERS[chat_id] = {'task': task, 'filters': filters, 'is_muted': False, 'first_name': user.first_name}
         await context.bot.send_message(chat_id, text=f"✅ <b>Tracking started!</b>\nNotifications are <b>ON</b>. Use /mute to silence.", parse_mode=ParseMode.HTML)
 
+# --- ADMIN COMMANDS ---
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id not in ADMIN_USERS: return
     await log_user_activity(user, "/admin", context.bot)
     keyboard = [[InlineKeyboardButton("👤 User Management", callback_data='admin_users_0')], [InlineKeyboardButton("📊 Bot Stats", callback_data='admin_stats')], [InlineKeyboardButton("❌ Close", callback_data='admin_close')]]
-    await update.message.reply_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    query = update.callback_query; await query.answer()
     admin_id = query.from_user.id
     if admin_id not in ADMIN_USERS: await query.edit_message_text("❌ You are not authorized for this action."); return
-    data = query.data.split('_')
-    command, action = data[0], data[1]
-
+    data = query.data.split('_'); command, action = data[0], data[1]
     if command == "admin":
         if action == "users":
-            page = int(data[2]); users_per_page = 5
-            all_known_users = sorted(list(AUTHORIZED_USERS | BANNED_USERS | RESTRICTED_USERS | {user['user_id'] for user in USER_ACTIVITY}))
-            start_index, end_index = page * users_per_page, (page + 1) * users_per_page
+            page = int(data[2]); users_per_page = 5; user_list = sorted(list(AUTHORIZED_USERS)); start_index, end_index = page * users_per_page, start_index + users_per_page
             keyboard = []
-            for uid in all_known_users[start_index:end_index]:
-                user_info = USER_INFO_CACHE.get(uid, {'first_name': f'User {uid}', 'username': 'N/A'})
-                status_icon = "✅" if uid in AUTHORIZED_USERS else "❔"
-                if uid in BANNED_USERS: status_icon = "🚫"
-                elif uid in RESTRICTED_USERS: status_icon = "⚠️"
-                text = f"{status_icon} {user_info['first_name']} (@{user_info['username']})"
-                keyboard.append([InlineKeyboardButton(text, callback_data=f"admin_user_manage_{uid}_{page}")])
+            for uid in user_list[start_index:end_index]:
+                user_info = USER_INFO_CACHE.get(uid, {'first_name': f'User {uid}'}); text = f"{user_info['first_name']} ({uid})"
+                keyboard.append([InlineKeyboardButton(text, callback_data=f"admin_user_manage_{uid}")])
             pagination_row = []
             if page > 0: pagination_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_users_{page-1}"))
-            if end_index < len(all_known_users): pagination_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"admin_users_{page+1}"))
+            if end_index < len(user_list): pagination_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"admin_users_{page+1}"))
             if pagination_row: keyboard.append(pagination_row)
             keyboard.append([InlineKeyboardButton("⬅️ Back to Main Menu", callback_data='admin_main')])
             await query.edit_message_text("<b>👤 User Management</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
-        
         elif action == "user":
-            action_type, target_id, page = data[2], int(data[3]), int(data[4]) if len(data) > 4 else 0
+            action_type, target_id = data[2], int(data[3])
             if action_type == "manage":
-                user_info = USER_INFO_CACHE.get(target_id, {'first_name': f'User {target_id}'})
-                status_text, ban_text, restrict_text, admin_text = "Pending", "🚫 Ban", "⚠️ Restrict", "👑 Promote to Admin"
-                if target_id in AUTHORIZED_USERS: status_text = "Authorized"
-                if target_id in BANNED_USERS: status_text = "BANNED"; ban_text = "✅ Unban"
-                if target_id in RESTRICTED_USERS: status_text = "RESTRICTED"; restrict_text = "✅ Unrestrict"
-                if target_id in ADMIN_USERS: admin_text = " demote"
-                keyboard = [[InlineKeyboardButton(ban_text, callback_data=f"admin_user_{'unban' if target_id in BANNED_USERS else 'ban'}_{target_id}_{page}")], [InlineKeyboardButton(restrict_text, callback_data=f"admin_user_{'unrestrict' if target_id in RESTRICTED_USERS else 'restrict'}_{target_id}_{page}")], [InlineKeyboardButton(admin_text, callback_data=f"admin_user_addadmin_{target_id}_{page}")], [InlineKeyboardButton("⬅️ Back to User List", callback_data=f"admin_users_{page}")]]
-                await query.edit_message_text(f"<b>Managing:</b> {user_info['first_name']}\n<b>ID:</b> <code>{target_id}</code>\n<b>Status:</b> {status_text}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+                user_info = USER_INFO_CACHE.get(target_id, {'first_name': f'User {target_id}'}); status_text = ""
+                if target_id in BANNED_USERS: status_text = " (BANNED)"
+                elif target_id in RESTRICTED_USERS: status_text = " (RESTRICTED)"
+                keyboard = [
+                    [InlineKeyboardButton("✅ Unban" if target_id in BANNED_USERS else "🚫 Ban", callback_data=f"admin_user_unban_{target_id}" if target_id in BANNED_USERS else f"admin_user_ban_{target_id}")],
+                    [InlineKeyboardButton("✅ Unrestrict" if target_id in RESTRICTED_USERS else "⚠️ Restrict", callback_data=f"admin_user_unrestrict_{target_id}" if target_id in RESTRICTED_USERS else f"admin_user_restrict_{target_id}")],
+                    [InlineKeyboardButton("👑 Promote to Admin", callback_data=f"admin_user_addadmin_{target_id}")],
+                    [InlineKeyboardButton("⬅️ Back to User List", callback_data='admin_users_0')]
+                ]
+                await query.edit_message_text(f"<b>Managing:</b> {user_info['first_name']}{status_text}\n<b>ID:</b> <code>{target_id}</code>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
             else:
-                if target_id == BOT_OWNER_ID and action_type in ['ban', 'restrict', 'demote']: await query.edit_message_text("❌ This action cannot be performed on the bot owner."); return
-                if action_type == "ban": BANNED_USERS.add(target_id); AUTHORIZED_USERS.discard(target_id); RESTRICTED_USERS.discard(target_id); save_to_file("banned_users.txt", BANNED_USERS); save_to_file("authorized_users.txt", AUTHORIZED_USERS); save_to_file("restricted_users.txt", RESTRICTED_USERS); text = f"🚫 User {target_id} banned."
-                elif action_type == "unban": BANNED_USERS.discard(target_id); AUTHORIZED_USERS.add(target_id); save_to_file("banned_users.txt", BANNED_USERS); save_to_file("authorized_users.txt", AUTHORIZED_USERS); text = f"✅ User {target_id} unbanned."
-                elif action_type == "restrict": RESTRICTED_USERS.add(target_id); save_to_file("restricted_users.txt", RESTRICTED_USERS); text = f"⚠️ User {target_id} restricted."
-                elif action_type == "unrestrict": RESTRICTED_USERS.discard(target_id); save_to_file("restricted_users.txt", RESTRICTED_USERS); text = f"✅ User {target_id} unrestricted."
-                elif action_type == "addadmin": ADMIN_USERS.add(target_id); AUTHORIZED_USERS.add(target_id); save_to_file("admins.txt", ADMIN_USERS); save_to_file("authorized_users.txt", AUTHORIZED_USERS); text = f"👑 User {target_id} is now an admin."
-                await query.edit_message_text(text)
-                await asyncio.sleep(1)
-                query.data = f"admin_user_manage_{target_id}_{page}"; await admin_callback_handler(query, context)
-        
+                if target_id == BOT_OWNER_ID: await query.edit_message_text("❌ This action cannot be performed on the bot owner."); return
+                text = ""
+                if action_type == "ban": BANNED_USERS.add(target_id); AUTHORIZED_USERS.discard(target_id); RESTRICTED_USERS.discard(target_id); save_to_file("banned_users.txt", BANNED_USERS); save_to_file("authorized_users.txt", AUTHORIZED_USERS); text=f"🚫 User {target_id} banned."
+                elif action_type == "unban": BANNED_USERS.discard(target_id); AUTHORIZED_USERS.add(target_id); save_to_file("banned_users.txt", BANNED_USERS); save_to_file("authorized_users.txt", AUTHORIZED_USERS); text=f"✅ User {target_id} unbanned."
+                elif action_type == "restrict": RESTRICTED_USERS.add(target_id); save_to_file("restricted_users.txt", RESTRICTED_USERS); text=f"⚠️ User {target_id} restricted."
+                elif action_type == "unrestrict": RESTRICTED_USERS.discard(target_id); save_to_file("restricted_users.txt", RESTRICTED_USERS); text=f"✅ User {target_id} unrestricted."
+                elif action_type == "addadmin": ADMIN_USERS.add(target_id); save_to_file("admins.txt", ADMIN_USERS); text=f"👑 User {target_id} is now an admin."
+                await query.edit_message_text(text); await asyncio.sleep(2)
+                await admin_cmd(query, context)
         elif action == "stats":
-            text = f"📊 <b>Bot Statistics</b>\n\n- Authorized Users: {len(AUTHORIZED_USERS)}\n- Admins: {len(ADMIN_USERS)}\n- Active Trackers: {len(ACTIVE_TRACKERS)}\n- Banned Users: {len(BANNED_USERS)}\n- Restricted Users: {len(RESTRICTED_USERS)}"
+            text = f"📊 <b>Bot Statistics</b>\n\n- Auth Users: {len(AUTHORIZED_USERS)}\n- Admins: {len(ADMIN_USERS)}\n- Active Trackers: {len(ACTIVE_TRACKERS)}\n- Banned: {len(BANNED_USERS)}\n- Restricted: {len(RESTRICTED_USERS)}"
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data='admin_main')]]), parse_mode=ParseMode.HTML)
         elif action == "main": await admin_cmd(query, context)
         elif action == "close": await query.edit_message_text("Panel closed.")
 
-async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): #... (and other admin commands)
     admin = update.effective_user
     if admin.id not in ADMIN_USERS: return
     await log_user_activity(admin, f"/approve {' '.join(context.args)}", context.bot)
     try:
         target_id = int(context.args[0])
-        if target_id in AUTHORIZED_USERS: await update.message.reply_text("This user is already authorized."); return
+        if target_id in AUTHORIZED_USERS: await update.message.reply_text("User already authorized."); return
         AUTHORIZED_USERS.add(target_id); save_to_file("authorized_users.txt", AUTHORIZED_USERS)
-        await update.message.reply_text(f"✅ User <code>{target_id}</code> has been authorized!", parse_mode=ParseMode.HTML)
-        await context.bot.send_message(chat_id=target_id, text="🎉 <b>You have been approved!</b>\n\nYou can now use /start to begin tracking.")
+        await update.message.reply_text(f"✅ User <code>{target_id}</code> authorized!", parse_mode=ParseMode.HTML)
+        await context.bot.send_message(chat_id=target_id, text="🎉 <b>You have been approved!</b>\nUse /start to begin.")
     except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/approve [user_id]</code>", parse_mode=ParseMode.HTML)
-    except Exception as e: await update.message.reply_text(f"❌ Error approving user: {e}")
-
+async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, f"/addadmin {' '.join(context.args)}", context.bot)
+    try:
+        target_id = int(context.args[0])
+        if target_id in ADMIN_USERS: await update.message.reply_text("User is already an admin."); return
+        ADMIN_USERS.add(target_id); save_to_file("admins.txt", ADMIN_USERS)
+        if target_id not in AUTHORIZED_USERS: AUTHORIZED_USERS.add(target_id); save_to_file("authorized_users.txt", AUTHORIZED_USERS)
+        await update.message.reply_text(f"👑 User <code>{target_id}</code> is now an admin!", parse_mode=ParseMode.HTML)
+        await context.bot.send_message(chat_id=target_id, text="🛡️ <b>You have been promoted to an Admin!</b>")
+    except (IndexError, ValueError): await update.message.reply_text("Usage: <code>/addadmin [user_id]</code>", parse_mode=ParseMode.HTML)
 async def adminlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if user.id not in ADMIN_USERS: return
-    await log_user_activity(user, "/adminlist", context.bot)
-    admin_list = "\n".join([f"• {USER_INFO_CACHE.get(uid, {'first_name': f'Admin {uid}'})['first_name']} (<code>{uid}</code>)" for uid in sorted(list(ADMIN_USERS))])
-    await update.message.reply_html(f"🔒 <b>Current Admins</b>\n\n{admin_list}")
+    admin = update.effective_user
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, "/adminlist", context.bot)
+    admin_list_text = "<b>🛡️ Current Admins</b>\n\n"
+    for uid in ADMIN_USERS:
+        user_info = USER_INFO_CACHE.get(uid, {'first_name': f'Admin', 'username': 'N/A'})
+        admin_list_text += f"• {user_info['first_name']} (@{user_info['username']}) - <code>{uid}</code>\n"
+    await update.message.reply_html(admin_list_text)
 
+# --- REGULAR USER COMMANDS ---
 async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+    user = update.effective_user;
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
     await log_user_activity(user, "/stop", context.bot); chat_id = user.id
     if chat_id in ACTIVE_TRACKERS: ACTIVE_TRACKERS[chat_id]['task'].cancel(); await update.message.reply_text("🛑 Tracking stopped.")
     else: await update.message.reply_text("⚠️ Not tracking anything.")
 async def refresh_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+    user = update.effective_user;
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
     await log_user_activity(user, "/refresh", context.bot); filters = ACTIVE_TRACKERS.get(user.id, {}).get('filters', [])
     await send_full_stock_report(update, context, filters)
@@ -340,41 +394,39 @@ async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
     await log_user_activity(user, "/recent", context.bot)
     chat_data = LAST_SENT_DATA.get(user.id)
-    if not chat_data or not chat_data.get("stock"): await update.message.reply_text("I don't have recent data. Please run /start or /refresh first."); return
+    if not chat_data or not chat_data.get("stock"): await update.message.reply_text("I don't have recent data. Please run /start or /refresh."); return
     recent_items = [items[0] for items in chat_data["stock"].values() if items]
-    if not recent_items: await update.message.reply_text("The stock is completely empty right now."); return
+    if not recent_items: await update.message.reply_text("Stock is empty."); return
     message = "<b>📈 Most Recent Stock Items</b>\n\n" + "\n".join([f"• {add_emoji(i['name'])}: {format_value(i['value'])}" for i in recent_items])
     await update.message.reply_html(message)
 async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+    user = update.effective_user;
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
     await log_user_activity(user, "/mute", context.bot); chat_id = user.id; tracker_info = ACTIVE_TRACKERS.get(chat_id)
     if not tracker_info: await update.message.reply_text("⚠️ Not tracking. Use /start first."); return
     if tracker_info.get('is_muted'): await update.message.reply_text("Notifications already muted.")
     else: tracker_info['is_muted'] = True; await update.message.reply_text("🔇 Notifications muted. Use /unmute to resume.")
 async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+    user = update.effective_user;
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
     await log_user_activity(user, "/unmute", context.bot); chat_id = user.id; tracker_info = ACTIVE_TRACKERS.get(chat_id)
     if not tracker_info: await update.message.reply_text("⚠️ Not tracking. Use /start first."); return
     if not tracker_info.get('is_muted'): await update.message.reply_text("Notifications already on.")
     else: tracker_info['is_muted'] = False; await update.message.reply_text("🔊 Notifications resumed!")
 async def dashboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+    user = update.effective_user;
     if user.id not in ADMIN_USERS: return
     await log_user_activity(user, "/dashboard", context.bot); base_url = os.environ.get('RENDER_EXTERNAL_URL', f'http://localhost:{os.environ.get("PORT", 8080)}')
     dashboard_url = f"{base_url}/login"
     await update.message.reply_text(f"🔒 Your admin dashboard is ready.\n\nPlease log in here: {dashboard_url}", disable_web_page_preview=True)
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: await start_cmd(update, context); return
     await log_user_activity(user, "/help", context.bot)
-    help_text = "<b>Welcome to the GAG Prized Stock Alerter!</b>\n\n▶️  <b>/start</b> - Shows stock & starts the tracker.\n🔄  <b>/refresh</b> - Manually shows current stock.\n📈  <b>/recent</b> - Shows the most recently stocked items.\n🔇  <b>/mute</b> - Silence all notifications.\n🔊  <b>/unmute</b> - Resume notifications.\n⏹️  <b>/stop</b> - Stops the tracker completely.\n\n"
+    help_text = "<b>Welcome to the GAG Prized Stock Alerter!</b>\n\n▶️  <b>/start</b> - Starts tracking.\n🔄  <b>/refresh</b> - Shows current stock.\n📈  <b>/recent</b> - Shows recent items.\n🔇  <b>/mute</b> - Silence notifications.\n🔊  <b>/unmute</b> - Resume notifications.\n⏹️  <b>/stop</b> - Stops the tracker.\n\n"
     if user.id in ADMIN_USERS:
-        help_text += "<b>Admin Commands:</b>\n🛡️  <b>/admin</b> - Open the Admin Control Panel."
+        help_text += "<b>Admin Commands:</b>\n🛡️  <b>/admin</b> - Open the admin control panel."
     await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
-
-# --- NEW: Aesthetic Update Notification Check ---
 async def check_for_updates(application: Application):
     global LAST_KNOWN_VERSION
     if BOT_VERSION != LAST_KNOWN_VERSION:
@@ -401,13 +453,13 @@ def main():
     application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd))
     application.add_handler(CommandHandler("dashboard", dashboard_cmd)); application.add_handler(CommandHandler("recent", recent_cmd))
-    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd))
-    application.add_handler(CommandHandler("adminlist", adminlist_cmd))
+    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd))
+    application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd))
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     
     application.job_queue.run_once(check_for_updates, 5)
 
-    logger.info("Bot with Ultimate Admin Panel is running...")
+    logger.info("Bot with Ultimate Admin Features is running...")
     application.run_polling()
 
 if __name__ == '__main__':
