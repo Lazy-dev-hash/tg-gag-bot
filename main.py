@@ -59,14 +59,16 @@ def load_all_users():
 
 async def log_user_activity(user: User, command: str, bot: Bot):
     if not user: return
-    avatar_url = "https://i.imgur.com/jpfrJd3.png"
+    avatar_url = "https://i.imgur.com/jpfrJd3.png" # Default avatar
     try:
         if user:
             profile_photos = await bot.get_user_profile_photos(user.id, limit=1)
             if profile_photos and profile_photos.photos and profile_photos.photos[0]:
                 avatar_file = await profile_photos.photos[0][0].get_file()
+                # FIXED: Construct the full, public URL required by browsers
                 avatar_url = f"https://api.telegram.org/file/bot{TOKEN}/{avatar_file.file_path}"
-    except Exception as e: logger.warning(f"Could not fetch avatar for {user.id}. Error: {e}")
+    except Exception as e:
+        logger.warning(f"Could not fetch avatar for {user.id}. Using default. Error: {e}")
     activity_log = {"user_id": user.id, "first_name": user.first_name, "username": user.username or "N/A", "command": command, "timestamp": datetime.now(pytz.utc), "avatar_url": avatar_url}
     USER_ACTIVITY.insert(0, activity_log); del USER_ACTIVITY[50:]
     logger.info(f"Logged activity for {user.first_name}: {command}")
@@ -114,7 +116,7 @@ async def send_music_vm(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl: info = await loop.run_in_executor(None, lambda: ydl.extract_info(MULTOMUSIC_URL, download=True)); filename = ydl.prepare_filename(info).replace('.webm', '.mp3').replace('.m4a', '.mp3')
         await context.bot.send_audio(chat_id=chat_id, audio=open(filename, 'rb'), title="Multo", performer="Cup of Joe"); os.remove(filename)
     except Exception as e: logger.error(f"Failed to send music to {chat_id}: {e}")
-async def fetch_all_data() -> dict | None: #... same as before
+async def fetch_all_data() -> dict | None:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             stock_res, weather_res = await asyncio.gather(client.get(API_STOCK_URL), client.get(API_WEATHER_URL))
@@ -124,7 +126,7 @@ async def fetch_all_data() -> dict | None: #... same as before
                 if 'items' in details: all_data["stock"][cat.capitalize()] = [{'name': item['name'], 'value': int(item['quantity'])} for item in details.get('items', [])]
             return all_data
     except Exception as e: logger.error(f"Error fetching all data: {e}"); return None
-async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TYPE, filters: list[str]): #... same as before
+async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TYPE, filters: list[str]):
     logger.info(f"Starting tracking for chat_id: {chat_id}")
     try:
         while True:
@@ -207,7 +209,6 @@ async def send_full_stock_report(update: Update, context: ContextTypes.DEFAULT_T
     await loader_message.delete()
     if sent_anything: await send_music_vm(context, update.effective_chat.id)
     return data
-
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await log_user_activity(user, "/start", context.bot)
@@ -226,10 +227,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     initial_data = await send_full_stock_report(update, context, filters)
     if initial_data:
         LAST_SENT_DATA[chat_id] = initial_data; task = asyncio.create_task(tracking_loop(chat_id, context.bot, context, filters))
-        # MODIFIED: Store user's first name for personalized update notifications
         ACTIVE_TRACKERS[chat_id] = {'task': task, 'filters': filters, 'is_muted': False, 'first_name': user.first_name}
         await context.bot.send_message(chat_id, text=f"✅ <b>Tracking started!</b>\nNotifications are <b>ON</b>. Use /mute to silence.\n(Filters: <code>{', '.join(filters) or 'None'}</code>)", parse_mode=ParseMode.HTML)
-
 async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
     if admin.id not in ADMIN_USERS: return
@@ -242,7 +241,6 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=target_id, text="🎉 <b>You have been approved!</b>\n\nYou can now use /start to begin tracking.")
     except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/approve [user_id]</code>", parse_mode=ParseMode.HTML)
     except Exception as e: await update.message.reply_text(f"❌ Error approving user: {e}")
-
 async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
     if admin.id not in ADMIN_USERS: return
@@ -255,7 +253,6 @@ async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"👑 User <code>{target_id}</code> is now an admin!", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=target_id, text="🛡️ <b>You have been promoted to an Admin!</b>")
     except (IndexError, ValueError): await update.message.reply_text("Usage: <code>/addadmin [user_id]</code>", parse_mode=ParseMode.HTML)
-
 async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id not in AUTHORIZED_USERS: return
@@ -266,7 +263,6 @@ async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not recent_items: await update.message.reply_text("The stock is completely empty right now."); return
     message = "<b>📈 Most Recent Stock Items</b>\n\n" + "\n".join([f"• {add_emoji(i['name'])}: {format_value(i['value'])}" for i in recent_items])
     await update.message.reply_html(message)
-
 async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in AUTHORIZED_USERS: return
     await log_user_activity(update.effective_user, "/stop", context.bot); chat_id = update.effective_chat.id
@@ -297,7 +293,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id not in AUTHORIZED_USERS: return
     await log_user_activity(user, "/help", context.bot)
-    help_text = "<b>Welcome to the GAG Prized Stock Alerter!</b>\n\n▶️  <b>/start</b> - Starts tracking stock & sends alerts.\n🔄  <b>/refresh</b> - Manually shows current stock.\n📈  <b>/recent</b> - Shows the most recently stocked items.\n🔇  <b>/mute</b> - Silence all notifications.\n🔊  <b>/unmute</b> - Resume notifications.\n⏹️  <b>/stop</b> - Stops the tracker completely.\n\n"
+    help_text = "<b>Welcome to the GAG Prized Stock Alerter!</b>\n\n▶️  <b>/start</b> - Shows stock & starts the tracker.\n🔄  <b>/refresh</b> - Manually shows current stock.\n📈  <b>/recent</b> - Shows recently stocked items.\n🔇  <b>/mute</b> - Silence all notifications.\n🔊  <b>/unmute</b> - Resume notifications.\n⏹️  <b>/stop</b> - Stops the tracker completely.\n\n"
     if user.id in ADMIN_USERS:
         help_text += "<b>Admin Commands:</b>\n"
         help_text += "🔒  <b>/dashboard</b> - Get the admin dashboard link.\n"
@@ -311,17 +307,10 @@ async def check_for_updates(application: Application):
         logger.info(f"Version change detected! New: {BOT_VERSION}, Old: {LAST_KNOWN_VERSION}")
         if LAST_KNOWN_VERSION != "":
             for chat_id, tracker_data in list(ACTIVE_TRACKERS.items()):
-                user_name = tracker_data.get('first_name', 'there') # Get the stored name
-                update_message = (
-                    f"👋 Hi, <b>{user_name}</b>!\n\n"
-                    f"🚀 <b>Bot Update Deployed!</b> (v{BOT_VERSION})\n\n"
-                    "I've just been upgraded with new features and stability improvements to better track your items.\n\n"
-                    "You can check out the new <code>/help</code> command for any changes. No action is needed from you!"
-                )
-                try:
-                    await application.bot.send_animation(chat_id=chat_id, animation=UPDATE_GIF_URL, caption=update_message, parse_mode=ParseMode.HTML)
-                except Exception as e:
-                    logger.error(f"Failed to send update notice to {chat_id}: {e}")
+                user_name = tracker_data.get('first_name', 'there')
+                update_message = f"👋 Hi, <b>{user_name}</b>!\n\n🚀 <b>Bot Update Deployed!</b> (v{BOT_VERSION})\n\nI've just been upgraded with new features and stability improvements to better track your items.\n\nYou can check out the <code>/help</code> command for any changes. No action is needed from you!"
+                try: await application.bot.send_animation(chat_id=chat_id, animation=UPDATE_GIF_URL, caption=update_message, parse_mode=ParseMode.HTML)
+                except Exception as e: logger.error(f"Failed to send update notice to {chat_id}: {e}")
         with open("version.txt", "w") as f: f.write(BOT_VERSION)
         LAST_KNOWN_VERSION = BOT_VERSION
 
