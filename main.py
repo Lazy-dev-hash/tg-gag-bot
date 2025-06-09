@@ -22,7 +22,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '1.0.0') # For update notifications
+BOT_VERSION = os.environ.get('BOT_VERSION', '1.0.0')
 
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
 API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
@@ -33,7 +33,7 @@ UPDATE_GIF_URL = "https://i.pinimg.com/originals/e5/22/07/e52207b837755b763b65b6
 
 ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
 AUTHORIZED_USERS, ADMIN_USERS = set(), set()
-LAST_KNOWN_VERSION = "" # For update detection
+LAST_KNOWN_VERSION = ""
 
 # --- LOGGING SETUP ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -57,7 +57,6 @@ def load_all_users():
         with open("version.txt", 'r') as f: LAST_KNOWN_VERSION = f.read().strip()
     logger.info(f"Loaded {len(AUTHORIZED_USERS)} users, {len(ADMIN_USERS)} admins. Previous version: {LAST_KNOWN_VERSION or 'N/A'}")
 
-# --- DECOUPLED ACTIVITY LOGGER ---
 async def log_user_activity(user: User, command: str, bot: Bot):
     if not user: return
     avatar_url = "https://i.imgur.com/jpfrJd3.png"
@@ -227,7 +226,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     initial_data = await send_full_stock_report(update, context, filters)
     if initial_data:
         LAST_SENT_DATA[chat_id] = initial_data; task = asyncio.create_task(tracking_loop(chat_id, context.bot, context, filters))
-        ACTIVE_TRACKERS[chat_id] = {'task': task, 'filters': filters, 'is_muted': False}
+        # MODIFIED: Store user's first name for personalized update notifications
+        ACTIVE_TRACKERS[chat_id] = {'task': task, 'filters': filters, 'is_muted': False, 'first_name': user.first_name}
         await context.bot.send_message(chat_id, text=f"✅ <b>Tracking started!</b>\nNotifications are <b>ON</b>. Use /mute to silence.\n(Filters: <code>{', '.join(filters) or 'None'}</code>)", parse_mode=ParseMode.HTML)
 
 async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -260,24 +260,11 @@ async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id not in AUTHORIZED_USERS: return
     await log_user_activity(user, "/recent", context.bot)
-    
     chat_data = LAST_SENT_DATA.get(user.id)
-    if not chat_data or not chat_data.get("stock"):
-        await update.message.reply_text("I don't have any recent stock data for you yet. Please run /start or /refresh first.")
-        return
-        
-    recent_items = []
-    for category, items in chat_data["stock"].items():
-        if items:
-            # Get the first item as the most "recent" representation of the category
-            recent_items.append(items[0])
-    
-    if not recent_items:
-        await update.message.reply_text("It seems the stock is completely empty right now.")
-        return
-    
-    message = "<b>📈 Most Recent Stock Items</b>\n\n"
-    message += "\n".join([f"• {add_emoji(i['name'])}: {format_value(i['value'])}" for i in recent_items])
+    if not chat_data or not chat_data.get("stock"): await update.message.reply_text("I don't have any recent stock data. Please run /start or /refresh first."); return
+    recent_items = [items[0] for items in chat_data["stock"].values() if items]
+    if not recent_items: await update.message.reply_text("The stock is completely empty right now."); return
+    message = "<b>📈 Most Recent Stock Items</b>\n\n" + "\n".join([f"• {add_emoji(i['name'])}: {format_value(i['value'])}" for i in recent_items])
     await update.message.reply_html(message)
 
 async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -310,31 +297,33 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id not in AUTHORIZED_USERS: return
     await log_user_activity(user, "/help", context.bot)
-    help_text = "<b>Welcome to the GAG Prized Stock Alerter!</b>\n\n▶️  <b>/start</b> - Shows stock & starts the tracker.\n🔄  <b>/refresh</b> - Manually shows current stock.\n📈  <b>/recent</b> - Shows the most recently stocked items.\n🔇  <b>/mute</b> - Silence all notifications.\n🔊  <b>/unmute</b> - Resume notifications.\n⏹️  <b>/stop</b> - Stops the tracker completely.\n\n"
+    help_text = "<b>Welcome to the GAG Prized Stock Alerter!</b>\n\n▶️  <b>/start</b> - Starts tracking stock & sends alerts.\n🔄  <b>/refresh</b> - Manually shows current stock.\n📈  <b>/recent</b> - Shows the most recently stocked items.\n🔇  <b>/mute</b> - Silence all notifications.\n🔊  <b>/unmute</b> - Resume notifications.\n⏹️  <b>/stop</b> - Stops the tracker completely.\n\n"
     if user.id in ADMIN_USERS:
         help_text += "<b>Admin Commands:</b>\n"
         help_text += "🔒  <b>/dashboard</b> - Get the admin dashboard link.\n"
         help_text += "✅  <b>/approve [user_id]</b> - Authorize a new user."
     await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
-# --- NEW: Update Notification Check ---
+# --- NEW: Aesthetic Update Notification Check ---
 async def check_for_updates(application: Application):
     global LAST_KNOWN_VERSION
     if BOT_VERSION != LAST_KNOWN_VERSION:
         logger.info(f"Version change detected! New: {BOT_VERSION}, Old: {LAST_KNOWN_VERSION}")
-        if LAST_KNOWN_VERSION != "": # Don't send on first ever startup
-            update_message = f"✨ <b>Bot has been updated to v{BOT_VERSION}!</b> ✨\n\nNew features and improvements have been deployed. Restarting the bot is not required."
-            # Send to all currently active users
-            for chat_id in list(ACTIVE_TRACKERS.keys()):
+        if LAST_KNOWN_VERSION != "":
+            for chat_id, tracker_data in list(ACTIVE_TRACKERS.items()):
+                user_name = tracker_data.get('first_name', 'there') # Get the stored name
+                update_message = (
+                    f"👋 Hi, <b>{user_name}</b>!\n\n"
+                    f"🚀 <b>Bot Update Deployed!</b> (v{BOT_VERSION})\n\n"
+                    "I've just been upgraded with new features and stability improvements to better track your items.\n\n"
+                    "You can check out the new <code>/help</code> command for any changes. No action is needed from you!"
+                )
                 try:
                     await application.bot.send_animation(chat_id=chat_id, animation=UPDATE_GIF_URL, caption=update_message, parse_mode=ParseMode.HTML)
                 except Exception as e:
                     logger.error(f"Failed to send update notice to {chat_id}: {e}")
-        # Update the version file
-        with open("version.txt", "w") as f:
-            f.write(BOT_VERSION)
+        with open("version.txt", "w") as f: f.write(BOT_VERSION)
         LAST_KNOWN_VERSION = BOT_VERSION
-
 
 def main():
     if not TOKEN: logger.critical("TELEGRAM_TOKEN not set!"); return
@@ -351,7 +340,6 @@ def main():
     application.add_handler(CommandHandler("dashboard", dashboard_cmd)); application.add_handler(CommandHandler("recent", recent_cmd))
     application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd))
     
-    # Schedule the update check to run once shortly after startup
     application.job_queue.run_once(check_for_updates, 5)
 
     logger.info("Bot with Full Security and Polished Dashboard is running...")
