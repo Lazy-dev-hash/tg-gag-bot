@@ -2,3 +2,4 @@ python-telegram-bot
 httpx
 pytz
 flask
+yt-dlp
