@@ -35,28 +35,16 @@ USER_ACTIVITY = []
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- NEW: Decoupled Async Logger (The Fix) ---
 async def log_user_activity(user: User, command: str, bot: Bot):
-    """Safely fetches user data and logs it for the dashboard."""
     if not user: return
-    
-    avatar_url = "https://i.imgur.com/jpfrJd3.png" # Default avatar
+    avatar_url = "https://i.imgur.com/jpfrJd3.png"
     try:
         profile_photos = await bot.get_user_profile_photos(user.id, limit=1)
-        if profile_photos and profile_photos.photos:
-            avatar_file = await profile_photos.photos[0][0].get_file()
-            avatar_url = avatar_file.file_path
-    except Exception as e:
-        logger.warning(f"Could not fetch avatar for {user.id}: {e}")
-
-    activity_log = {
-        "user_id": user.id, "first_name": user.first_name, "username": user.username or "N/A",
-        "command": command, "timestamp": datetime.now(pytz.utc), "avatar_url": avatar_url
-    }
-    USER_ACTIVITY.insert(0, activity_log)
-    del USER_ACTIVITY[50:]
+        if profile_photos and profile_photos.photos: avatar_url = (await profile_photos.photos[0][0].get_file()).file_path
+    except Exception as e: logger.warning(f"Could not fetch avatar for {user.id}: {e}")
+    activity_log = {"user_id": user.id, "first_name": user.first_name, "username": user.username or "N/A", "command": command, "timestamp": datetime.now(pytz.utc), "avatar_url": avatar_url}
+    USER_ACTIVITY.insert(0, activity_log); del USER_ACTIVITY[50:]
     logger.info(f"Logged activity for {user.first_name}: {command}")
-
 
 # --- HELPER & FORMATTING FUNCTIONS (Unchanged) ---
 PHT = pytz.timezone('Asia/Manila')
@@ -64,8 +52,7 @@ def get_ph_time() -> datetime: return datetime.now(PHT)
 def get_countdown(target: datetime) -> str:
     now = get_ph_time(); time_left = target - now
     if time_left.total_seconds() <= 0: return "Restocked!"
-    total_seconds = int(time_left.total_seconds())
-    h, m, s = total_seconds // 3600, (total_seconds % 3600) // 60, total_seconds % 60
+    total_seconds = int(time_left.total_seconds()); h, m, s = total_seconds // 3600, (total_seconds % 3600) // 60, total_seconds % 60
     return f"{h:02}h {m:02}m {s:02}s"
 def get_all_restock_timers() -> dict:
     now = get_ph_time(); timers = {}
@@ -73,15 +60,12 @@ def get_all_restock_timers() -> dict:
     if now.minute < 30: next_egg = next_egg.replace(minute=30)
     else: next_egg = (next_egg + timedelta(hours=1)).replace(minute=0)
     timers['Egg'] = get_countdown(next_egg)
-    next_5 = now.replace(second=0, microsecond=0)
-    next_m = (now.minute // 5 + 1) * 5
+    next_5 = now.replace(second=0, microsecond=0); next_m = (now.minute // 5 + 1) * 5
     if next_m >= 60: next_5 = (next_5 + timedelta(hours=1)).replace(minute=0)
     else: next_5 = next_5.replace(minute=next_m)
     timers['Gear'] = timers['Seed'] = get_countdown(next_5)
-    next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-    timers['Honey'] = get_countdown(next_hour)
-    next_7 = now.replace(minute=0, second=0, microsecond=0)
-    next_7h = (now.hour // 7 + 1) * 7
+    next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0); timers['Honey'] = get_countdown(next_hour)
+    next_7 = now.replace(minute=0, second=0, microsecond=0); next_7h = (now.hour // 7 + 1) * 7
     if next_7h >= 24: next_7 = (next_7 + timedelta(days=1)).replace(hour=next_7h % 24)
     else: next_7 = next_7.replace(hour=next_7h)
     timers['Cosmetics'] = get_countdown(next_7)
@@ -99,7 +83,6 @@ def format_category_message(category_name: str, items: list, restock_timer: str,
     item_list = "\n".join([f"• {add_emoji(i['name'])}: {format_value(i['value'])}" for i in items]) if items else "<i>No items currently in stock.</i>"
     return f"{header}\n\n{item_list}\n\n⏳ Restock in: {restock_timer}\n{weather_info}"
 async def send_music_vm(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    logger.info(f"Preparing to send music to {chat_id}")
     try:
         ydl_opts = {'format': 'bestaudio/best', 'outtmpl': f'{chat_id}_%(title)s.%(ext)s', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}], 'quiet': True}
         loop = asyncio.get_running_loop()
@@ -108,18 +91,17 @@ async def send_music_vm(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     except Exception as e: logger.error(f"Failed to send music to {chat_id}: {e}")
 
 # --- CORE BOT LOGIC (Unchanged) ---
-async def fetch_all_data() -> dict | None:
+async def fetch_all_data() -> dict | None: #... same as before
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             stock_res, weather_res = await asyncio.gather(client.get(API_STOCK_URL), client.get(API_WEATHER_URL))
-            stock_res.raise_for_status(); weather_res.raise_for_status()
-            stock_data_raw, weather_data = stock_res.json()['data'], weather_res.json()
+            stock_res.raise_for_status(); weather_res.raise_for_status(); stock_data_raw, weather_data = stock_res.json()['data'], weather_res.json()
             all_data = {"stock": {}, "weather": weather_data}
             for cat, details in stock_data_raw.items():
                 if 'items' in details: all_data["stock"][cat.capitalize()] = [{'name': item['name'], 'value': int(item['quantity'])} for item in details.get('items', [])]
             return all_data
     except Exception as e: logger.error(f"Error fetching all data: {e}"); return None
-async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TYPE, filters: list[str]):
+async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TYPE, filters: list[str]): #... same as before
     logger.info(f"Starting tracking for chat_id: {chat_id}")
     try:
         while True:
@@ -155,61 +137,84 @@ async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TY
         if chat_id in ACTIVE_TRACKERS: del ACTIVE_TRACKERS[chat_id]
         if chat_id in LAST_SENT_DATA: del LAST_SENT_DATA[chat_id]
 
-# --- NEW: Enhanced HTML Templates ---
+# --- NEW: AESTHETIC HTML TEMPLATES ---
 DASHBOARD_HTML = """
 <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Bot Dashboard</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<script src="https://cdn.jsdelivr.net/npm/tsparticles-slim@2.12.0/tsparticles.slim.bundle.min.js"></script>
 <style>
-:root { --bg: #0d1117; --primary: #bb86fc; --secondary: #03dac6; --surface: #161b22; --on-surface: #c9d1d9; --border: #30363d; --red: #f85149; }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: var(--bg); color: var(--on-surface); margin: 0; padding: 2rem; }
-.container { max-width: 1000px; margin: auto; }
-.header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 1rem; margin-bottom: 2rem; }
-h1 { color: white; margin: 0; }
-.logout-btn { color: var(--red); text-decoration: none; background-color: rgba(248, 81, 73, 0.1); padding: 10px 15px; border-radius: 6px; border: 1px solid var(--red); font-weight: 500; transition: background-color 0.2s; }
-.logout-btn:hover { background-color: rgba(248, 81, 73, 0.2); }
-.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; margin-bottom: 2.5rem; }
-.stat-card { background-color: var(--surface); padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); display: flex; align-items: center; gap: 1.5rem; }
-.stat-card .icon { font-size: 2rem; color: var(--primary); width: 50px; text-align: center; }
-.stat-card .value { font-size: 2.2rem; font-weight: 600; color: white; }
-.stat-card .label { font-size: 0.9rem; color: var(--on-surface); }
-h2 { color: white; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin: 2.5rem 0 1.5rem 0; }
-.activity-log { background-color: var(--surface); border-radius: 8px; border: 1px solid var(--border); overflow: hidden; }
-table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 14px 18px; }
-th { background-color: rgba(0,0,0,0.2); color: var(--primary); font-weight: 500; }
-tbody tr { border-bottom: 1px solid var(--border); transition: background-color 0.2s; }
-tbody tr:last-child { border-bottom: none; }
-tbody tr:hover { background-color: rgba(187, 134, 252, 0.05); }
-.user-cell { display: flex; align-items: center; gap: 12px; }
-.user-cell img { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--border); }
-.user-cell .name { font-weight: 500; color: white; }
-.user-cell .username { color: #8b949e; font-size: 0.9em; }
-code { background-color: #2b2b2b; color: var(--secondary); padding: 3px 6px; border-radius: 4px; font-family: "SF Mono", "Fira Code", monospace; }
-</style></head><body><div class="container">
-<div class="header"><h1><i class="fa-solid fa-robot"></i> GAG Bot Dashboard</h1><a href="/logout" class="logout-btn">Logout</a></div>
-<div class="stats-grid"><div class="stat-card"><i class="fa-solid fa-satellite-dish icon"></i><div><div class="value">{{ stats.active_trackers }}</div><div class="label">Active Trackers</div></div></div><div class="stat-card"><i class="fa-solid fa-users icon"></i><div><div class="value">{{ stats.unique_users }}</div><div class="label">Recent Unique Users</div></div></div></div>
+:root{--bg:#0d1117;--primary:#c9a4ff;--secondary:#58a6ff;--surface:#161b22;--on-surface:#e6edf3;--border:#21262d;--red:#f85149;}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background-color:var(--bg);color:var(--on-surface);margin:0;padding:1.5rem;overflow-x:hidden;}
+#tsparticles{position:fixed;top:0;left:0;width:100%;height:100%;z-index:-1;}
+.container{max-width:1100px;margin:auto;animation:fadeIn 0.8s ease-out;}.header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:1rem;margin-bottom:2rem;}
+h1{font-weight:600;color:white;margin:0;font-size:1.8rem;letter-spacing:-1px;}
+.logout-btn{color:var(--red);text-decoration:none;background-color:rgba(248,81,73,0.1);padding:10px 15px;border-radius:6px;border:1px solid var(--red);font-weight:500;transition:all 0.2s;}
+.logout-btn:hover{background-color:rgba(248,81,73,0.2);transform:translateY(-2px);}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1.5rem;margin-bottom:2.5rem;}
+.stat-card{background:linear-gradient(145deg,rgba(255,255,255,0.05),rgba(255,255,255,0));backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);padding:1.5rem;border-radius:12px;border:1px solid var(--border);display:flex;align-items:center;gap:1.5rem;transition:all 0.3s ease;}
+.stat-card:hover{transform:translateY(-5px);box-shadow:0 10px 20px rgba(0,0,0,0.2);}
+.stat-card .icon{font-size:1.8rem;color:var(--primary);background:linear-gradient(145deg,rgba(201,164,255,0.1),rgba(201,164,255,0.2));width:60px;height:60px;border-radius:50%;display:grid;place-items:center;}
+.stat-card .value{font-size:2.8rem;font-weight:700;color:white;}.stat-card .label{font-size:1rem;color:#8b949e;}
+h2{color:white;border-bottom:1px solid var(--border);padding-bottom:10px;margin:2.5rem 0 1.5rem 0;font-weight:600;}
+.activity-log{background-color:var(--surface);border-radius:12px;border:1px solid var(--border);overflow:hidden;box-shadow:0 5px 15px rgba(0,0,0,0.1);}
+table{width:100%;border-collapse:collapse;}
+th,td{text-align:left;padding:16px 20px;}
+th{background-color:rgba(187,134,252,0.05);color:var(--primary);font-weight:600;text-transform:uppercase;font-size:0.8rem;letter-spacing:0.5px;}
+tbody tr{border-bottom:1px solid var(--border);transition:background-color 0.2s;}
+tbody tr:last-child{border-bottom:none;}
+tbody tr:hover{background-color:rgba(88,166,255,0.08);}
+.user-cell{display:flex;align-items:center;gap:15px;}
+.user-cell img{width:45px;height:45px;border-radius:50%;border:2px solid var(--border);}
+.user-cell .name{font-weight:600;color:white;}
+.user-cell .username{color:#8b949e;font-size:0.9em;}
+code{background-color:#2b2b2b;color:var(--secondary);padding:4px 8px;border-radius:4px;font-family:"SF Mono","Fira Code",monospace;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
+@media(max-width:768px){body{padding:1rem;}.header,h1{flex-direction:column;gap:1rem;text-align:center;}.stats-grid{grid-template-columns:1fr;}td,th{padding:12px 10px;}h1{font-size:1.5rem;}.stat-card .value{font-size:2.2rem;}}
+</style>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head><body><div id="tsparticles"></div><div class="container">
+<div class="header"><h1><i class="fa-solid fa-shield-halved"></i> GAG Bot Dashboard</h1><a href="/logout" class="logout-btn"><i class="fa-solid fa-arrow-right-from-bracket"></i> Logout</a></div>
+<div class="stats-grid"><div class="stat-card"><div class="icon"><i class="fa-solid fa-satellite-dish"></i></div><div><div class="value" data-target="{{ stats.active_trackers }}">0</div><div class="label">Active Trackers</div></div></div><div class="stat-card"><div class="icon"><i class="fa-solid fa-users"></i></div><div><div class="value" data-target="{{ stats.unique_users }}">0</div><div class="label">Recent Unique Users</div></div></div></div>
 <h2><i class="fa-solid fa-chart-line"></i> Recent Activity</h2>
 <div class="activity-log"><table><thead><tr><th>User</th><th>Command</th><th>Time</th></tr></thead><tbody>
 {% for log in activity %}
 <tr><td><div class="user-cell"><img src="{{ log.avatar_url }}" alt="Avatar"><div><div class="name">{{ log.first_name }}</div><div class="username">@{{ log.username }}</div></div></div></td><td><code>{{ log.command }}</code></td><td>{{ log.time_ago }} ago</td></tr>
 {% endfor %}
-</tbody></table></div></div></body></html>
+</tbody></table></div></div>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+  tsParticles.load("tsparticles", { preset: "stars", background: { color: { value: "#0d1117" } }, particles: { color: { value: "#ffffff" }, links: { color: "#ffffff", distance: 150, enable: true, opacity: 0.1, width: 1 }, move: { enable: true, speed: 0.5 }, number: { density: { enable: true, area: 800 }, value: 40 } } });
+  const counters = document.querySelectorAll('.value');
+  counters.forEach(counter => {
+    const target = +counter.getAttribute('data-target');
+    const duration = 1500;
+    let start = 0;
+    const stepTime = Math.abs(Math.floor(duration / target));
+    const timer = setInterval(() => {
+      start += 1;
+      counter.innerText = start;
+      if (start === target) { clearInterval(timer); }
+    }, stepTime > 0 ? stepTime : 1);
+  });
+});
+</script>
+</body></html>
 """
 LOGIN_HTML = """
 <!DOCTYPE html><html><head><title>Admin Login</title><style>
-:root { --bg: #0d1117; --primary: #bb86fc; --surface: #161b22; --border: #30363d; --red: #f85149; }
+:root { --bg: #0d1117; --primary: #c9a4ff; --surface: #161b22; --border: #21262d; --red: #f85149; }
 body { display:flex; justify-content:center; align-items:center; height:100vh; background-color:var(--bg); color:white; font-family: -apple-system, sans-serif; }
-.login-box { background-color: var(--surface); padding: 40px; border-radius: 8px; border: 1px solid var(--border); text-align: center; width: 320px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
-h2 { color: var(--primary); margin-top: 0; margin-bottom: 25px; font-weight: 500; }
-input { width: 100%; box-sizing: border-box; padding: 12px; margin-bottom: 15px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: white; font-size: 1rem; }
+.login-box { background-color: var(--surface); padding: 40px; border-radius: 12px; border: 1px solid var(--border); text-align: center; width: 340px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); animation: fadeIn 0.5s ease-out; }
+h2 { color: var(--primary); margin-top: 0; margin-bottom: 25px; font-weight: 600; letter-spacing: -0.5px; }
+input { width: 100%; box-sizing: border-box; padding: 14px; margin-bottom: 15px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: white; font-size: 1rem; transition: border-color 0.2s; }
 input:focus { border-color: var(--primary); outline: none; }
-button { width: 100%; padding: 12px; background-color: var(--primary); color: black; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 1rem; transition: background-color 0.2s; }
-button:hover { background-color: #a872e2; }
-.error { color: var(--red); margin-top: 15px; }
+button { width: 100%; padding: 14px; background: linear-gradient(90deg, var(--primary), #9a66e2); color: black; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 1rem; transition: all 0.2s; }
+button:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(201,164,255,0.2); }
+.error { color: var(--red); background-color: rgba(248,81,73,0.1); padding: 10px; border-radius: 6px; margin-top: 15px; border: 1px solid var(--red); }
+@keyframes fadeIn{from{opacity:0;transform:scale(0.95);}to{opacity:1;transform:scale(1);}}
 </style></head><body><div class="login-box"><form method="post"><h2>Bot Dashboard Login</h2><input type="text" name="username" placeholder="Username" required><input type="password" name="password" placeholder="Password" required><button type="submit">Login</button>{% if error %}<p class="error">{{ error }}</p>{% endif %}</form></div></body></html>
 """
 
-# --- FLASK WEB ROUTES (FIXED & STABLE) ---
+# --- FLASK WEB ROUTES (STABLE & DECOUPLED) ---
 @app.route('/')
 def home_route(): return "Bot is alive. Admin dashboard is at /login."
 @app.route('/login', methods=['GET', 'POST'])
@@ -223,8 +228,6 @@ def login_route():
 @app.route('/dashboard')
 def dashboard_route():
     if not session.get('logged_in'): return redirect(url_for('login_route'))
-    
-    # Dashboard is now fully sync and just reads pre-processed data
     display_activity = []
     for log in USER_ACTIVITY:
         time_diff = datetime.now(pytz.utc) - log['timestamp']
@@ -232,14 +235,14 @@ def dashboard_route():
         elif time_diff.total_seconds() < 3600: time_ago = f"{int(time_diff.total_seconds() / 60)}m"
         else: time_ago = f"{int(time_diff.total_seconds() / 3600)}h"
         display_activity.append({**log, "time_ago": time_ago})
-    
     stats = {"active_trackers": len(ACTIVE_TRACKERS), "unique_users": len(set(log['user_id'] for log in USER_ACTIVITY))}
     return render_template_string(DASHBOARD_HTML, activity=display_activity, stats=stats)
 @app.route('/logout')
 def logout_route(): session.pop('logged_in', None); return redirect(url_for('login_route'))
 
-# --- TELEGRAM COMMAND HANDLERS (MODIFIED TO USE NEW LOGGER) ---
+# --- TELEGRAM COMMAND HANDLERS ---
 async def send_full_stock_report(update: Update, context: ContextTypes.DEFAULT_TYPE, filters: list[str]):
+    # ... same as before
     loader_message = await update.message.reply_text("⏳ Fetching all stock categories...")
     data = await fetch_all_data()
     if not data: await loader_message.edit_text("⚠️ Could not fetch data."); return None
@@ -297,13 +300,12 @@ def main():
     
     global application # Make application instance globally accessible for the dashboard
     application = Application.builder().token(TOKEN).build()
-    
     application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd))
     application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd))
     application.add_handler(CommandHandler("dashboard", dashboard_cmd))
     
-    logger.info("Bot and a STABLE Dashboard are running...")
+    logger.info("Bot and ENHANCED Dashboard are running...")
     application.run_polling()
 
 if __name__ == '__main__':
