@@ -32,7 +32,8 @@ def keep_alive():
 
 # --- CONFIGURATION ---
 # The token is now loaded securely from Replit's "Secrets"
-TOKEN = os.environ['7601717697:AAG_jDIpup3dbQwFsmgQznVDrP067y4S9jg']
+# This is the CORRECT way
+TOKEN = os.environ['TELEGRAM_TOKEN']
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
 API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
 TRACKING_INTERVAL_SECONDS = 60
