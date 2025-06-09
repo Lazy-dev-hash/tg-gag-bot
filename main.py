@@ -11,15 +11,18 @@ from threading import Thread
 from telegram import Update, Bot
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
+from telegram.ext import Application, CommandHandler, ContextTypes  # <-- CORRECT IMPORT IS HERE
 
-# --- WEB SERVER FOR 24/7 UPTIME ---
+# --- WEB SERVER FOR 24/7 UPTIME (FOR RENDER/REPLIT) ---
 app = Flask('')
 @app.route('/')
 def home():
     return "Bot is alive and running!"
 
 def run_flask():
-    app.run(host='0.0.0.0', port=8080)
+    # Render provides the PORT environment variable.
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
     t = Thread(target=run_flask)
@@ -33,8 +36,6 @@ API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
 TRACKING_INTERVAL_SECONDS = 60
 
 # --- GLOBAL STATE MANAGEMENT ---
-# ACTIVE_TRACKERS will now store a dictionary for each user
-# {'task': asyncio.Task, 'filters': list[str]}
 ACTIVE_TRACKERS = {}
 LAST_SENT_DATA = {}
 
@@ -50,13 +51,12 @@ PHT = pytz.timezone('Asia/Manila')
 def get_ph_time() -> datetime:
     return datetime.now(PHT)
 
-# ... (get_countdown, format_value, and add_emoji functions remain the same as before) ...
 def get_countdown(target: datetime) -> str:
     now = get_ph_time()
-    ms_left = target - now
-    if ms_left.total_seconds() <= 0:
+    time_left = target - now
+    if time_left.total_seconds() <= 0:
         return "Restocked!"
-    total_seconds = int(ms_left.total_seconds())
+    total_seconds = int(time_left.total_seconds())
     h, m, s = total_seconds // 3600, (total_seconds % 3600) // 60, total_seconds % 60
     return f"{h:02}h {m:02}m {s:02}s"
 
@@ -67,13 +67,16 @@ def get_next_restocks() -> dict:
     if now.minute < 30: next_egg = next_egg.replace(minute=30)
     else: next_egg = (next_egg + timedelta(hours=1)).replace(minute=0)
     timers['Egg'] = get_countdown(next_egg)
+
     next_5 = now.replace(second=0, microsecond=0)
     next_m = (now.minute // 5 + 1) * 5
     if next_m >= 60: next_5 = (next_5 + timedelta(hours=1)).replace(minute=0)
     else: next_5 = next_5.replace(minute=next_m)
     timers['Gear & Seed'] = get_countdown(next_5)
+
     next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
     timers['Honey'] = get_countdown(next_hour)
+
     next_7 = now.replace(minute=0, second=0, microsecond=0)
     next_7h = (now.hour // 7 + 1) * 7
     if next_7h >= 24: next_7 = (next_7 + timedelta(days=1)).replace(hour=next_7h % 24)
@@ -111,7 +114,6 @@ async def fetch_and_format_message(filters: list[str]) -> tuple[str | None, str 
             stock_data_raw = stock_res.json()['data']
             weather_data = weather_res.json()
 
-        # Combine all items into a single list
         all_items = []
         for category in ['gear', 'seed', 'egg', 'cosmetics', 'honey']:
             all_items.extend(
@@ -119,28 +121,17 @@ async def fetch_and_format_message(filters: list[str]) -> tuple[str | None, str 
                  for item in stock_data_raw.get(category, {}).get('items', [])]
             )
         
-        # Create a unique key for the current stock state
         current_data_key = json.dumps(all_items, sort_keys=True)
+        items_to_show = [item for item in all_items if not filters or any(f in item['name'].lower() for f in filters)]
 
-        # Apply user filters if any
-        items_to_show = [
-            item for item in all_items
-            if not filters or any(f in item['name'].lower() for f in filters)
-        ]
-
-        # Format the single list of items
         if items_to_show:
-            item_list = "\n".join(
-                f"• {add_emoji(i['name'])}: {format_value(i['value'])}" for i in items_to_show
-            )
+            item_list = "\n".join(f"• {add_emoji(i['name'])}: {format_value(i['value'])}" for i in items_to_show)
         else:
             item_list = "Your filter returned no items." if filters else "No items currently in stock."
 
-        # Format restock timers
         restocks = get_next_restocks()
         restock_timers = "\n".join([f"› {cat}: {time}" for cat, time in restocks.items()])
 
-        # Format weather details
         weather = weather_data.get('currentWeather', 'Unknown')
         icon = weather_data.get('icon', '🌤️')
         bonus = weather_data.get('cropBonuses', 'None')
@@ -187,20 +178,16 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📡 You are already tracking! Use /stop first, or /refresh for a manual update.")
         return
 
-    # --- Loader Message ---
     loader_message = await update.message.reply_text("⏳ Fetching latest stock data...")
-
     filters = [f.strip().lower() for f in " ".join(context.args).split('|') if f.strip()]
-    
     data_key, message = await fetch_and_format_message(filters)
     
-    # --- Edit Loader with Final Message ---
     try:
         await loader_message.edit_text(message, parse_mode=ParseMode.HTML)
     except BadRequest as e:
         if "Message is not modified" not in str(e):
             logger.error(f"Error editing message: {e}")
-            await update.message.reply_text(message, parse_mode=ParseMode.HTML) # Fallback
+            await update.message.reply_text(message, parse_mode=ParseMode.HTML)
 
     if data_key:
         LAST_SENT_DATA[chat_id] = data_key
@@ -215,7 +202,6 @@ async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id in ACTIVE_TRACKERS:
         ACTIVE_TRACKERS[chat_id]['task'].cancel()
-        # The loop's finally block will clean up the dicts
         await update.message.reply_text("🛑 Gagstock tracking stopped.")
     else:
         await update.message.reply_text("⚠️ You don't have an active tracking session. Use /start to begin.")
@@ -223,23 +209,19 @@ async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def refresh_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id not in ACTIVE_TRACKERS:
-        await update.message.reply_text("⚠️ You aren't tracking anything. Use /start first.")
+        await update.message.reply_text("⚠️ You aren't tracking anything. Use /start first to get live updates, or just use /now to see current stock without tracking.")
         return
     
-    # --- Loader Message ---
     loader_message = await update.message.reply_text("⏳ Refreshing stock data...")
-
-    # Use the filters from the active session
     filters = ACTIVE_TRACKERS[chat_id]['filters']
     data_key, message = await fetch_and_format_message(filters)
 
-    # --- Edit Loader with Final Message ---
     try:
         await loader_message.edit_text(message, parse_mode=ParseMode.HTML)
     except BadRequest as e:
         if "Message is not modified" not in str(e):
             logger.error(f"Error editing message: {e}")
-            await update.message.reply_text(message, parse_mode=ParseMode.HTML) # Fallback
+            await update.message.reply_text(message, parse_mode=ParseMode.HTML)
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
@@ -264,7 +246,9 @@ def main():
         logger.critical("TELEGRAM_TOKEN environment variable not found! The bot cannot start.")
         return
 
+    # Start the web server to keep the bot alive on hosting platforms
     keep_alive()
+    
     application = Application.builder().token(TOKEN).build()
     
     application.add_handler(CommandHandler("start", start_cmd))
