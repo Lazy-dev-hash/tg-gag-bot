@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import os
+import json
 import yt_dlp
 import random
 import string
@@ -22,7 +23,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '3.0.0') # Major update version
+BOT_VERSION = os.environ.get('BOT_VERSION', '4.0.0') # Prestige Update
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
@@ -32,7 +33,16 @@ MULTOMUSIC_URL = "https://www.youtube.com/watch?v=sPma_hV4_sU"
 PRIZED_ITEMS = ["master sprinkler", "beanstalk", "advanced sprinkler", "godly sprinkler", "ember lily"]
 UPDATE_GIF_URL = "https://i.pinimg.com/originals/e5/22/07/e52207b837755b763b65b6302409feda.gif"
 
-ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
+# --- Rank System Configuration ---
+RANKS = {
+    0: {'name': 'Newbie', 'emoji': '🌱'},
+    50: {'name': 'Regular', 'emoji': '🌿'},
+    150: {'name': 'Veteran', 'emoji': '🌳'},
+    500: {'name': 'Elite', 'emoji': '🌟'},
+    1000: {'name': 'Master', 'emoji': '👑'}
+}
+
+ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY, USER_DATA = {}, {}, [], {}
 AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS = set(), set(), set(), set()
 LAST_KNOWN_VERSION, USER_INFO_CACHE = "", {}
 
@@ -40,7 +50,16 @@ LAST_KNOWN_VERSION, USER_INFO_CACHE = "", {}
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- PERSISTENT USER & ADMIN STORAGE ---
+# --- PERSISTENT STORAGE ---
+def load_from_json(filename):
+    if not os.path.exists(filename): return {}
+    try:
+        with open(filename, 'r') as f: return {int(k): v for k, v in json.load(f).items()}
+    except (json.JSONDecodeError, ValueError): return {}
+
+def save_to_json(filename, data):
+    with open(filename, 'w') as f: json.dump(data, f, indent=4)
+
 def load_from_file(filename):
     if not os.path.exists(filename): return set()
     with open(filename, 'r') as f: return {int(line.strip()) for line in f if line.strip().isdigit()}
@@ -49,12 +68,13 @@ def save_to_file(filename, user_set):
     with open(filename, 'w') as f:
         for user_id in user_set: f.write(f"{user_id}\n")
 
-def load_all_users():
-    global AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, LAST_KNOWN_VERSION
+def load_all_data():
+    global AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, LAST_KNOWN_VERSION, USER_DATA
     AUTHORIZED_USERS = load_from_file("authorized_users.txt")
     ADMIN_USERS = load_from_file("admins.txt")
     BANNED_USERS = load_from_file("banned_users.txt")
     RESTRICTED_USERS = load_from_file("restricted_users.txt")
+    USER_DATA = load_from_json("user_data.json")
     if BOT_OWNER_ID: AUTHORIZED_USERS.add(BOT_OWNER_ID); ADMIN_USERS.add(BOT_OWNER_ID)
     if os.path.exists("version.txt"):
         with open("version.txt", 'r') as f: LAST_KNOWN_VERSION = f.read().strip()
@@ -71,10 +91,35 @@ async def log_user_activity(user: User, command: str, bot: Bot):
         
         user_info = USER_INFO_CACHE[user.id]
         full_avatar_url = f"https://api.telegram.org/file/bot{TOKEN}/{user_info['avatar_url_path']}" if user_info['avatar_url_path'] else "https://i.imgur.com/jpfrJd3.png"
-        activity_log = {"user_id": user.id, "first_name": user_info['first_name'], "username": user_info['username'], "command": command, "timestamp": datetime.now(pytz.utc), "avatar_url": full_avatar_url}
+        activity_log = {"user_id": user.id, "first_name": user_info['first_name'], "username": user_info['username'], "command": command, "timestamp": datetime.now(pytz.utc).isoformat(), "avatar_url": full_avatar_url}
         USER_ACTIVITY.insert(0, activity_log); del USER_ACTIVITY[50:]
         logger.info(f"Logged activity for {user.first_name}: {command}")
     except Exception as e: logger.warning(f"Could not log activity for {user.id}. Error: {e}")
+
+# --- Rank-Up System ---
+def get_user_rank(xp):
+    current_rank = {'name': 'Unknown', 'emoji': '❓'}
+    for threshold, rank_info in sorted(RANKS.items()):
+        if xp >= threshold: current_rank = rank_info
+        else: break
+    return current_rank
+
+async def add_xp_and_check_rankup(user: User, xp_to_add: int, context: ContextTypes.DEFAULT_TYPE):
+    user_id = user.id
+    if user_id not in USER_DATA: USER_DATA[user_id] = {'xp': 0, 'rank': 'Newbie'}
+    
+    old_rank = get_user_rank(USER_DATA[user_id].get('xp', 0))['name']
+    USER_DATA[user_id]['xp'] = USER_DATA[user_id].get('xp', 0) + xp_to_add
+    new_rank_info = get_user_rank(USER_DATA[user_id]['xp'])
+    new_rank_name = new_rank_info['name']
+
+    if new_rank_name != old_rank:
+        USER_DATA[user_id]['rank'] = new_rank_name
+        message = (f"🎉  <b>RANK UP!</b>  🎉\n\nCongratulations, <b>{user.first_name}</b>! Your dedication has been recognized.\n\nYou have been promoted to the rank of:\n<b>{new_rank_info['emoji']} {new_rank_name} {new_rank_info['emoji']}</b>")
+        try: await context.bot.send_message(chat_id=user_id, text=message, parse_mode=ParseMode.HTML)
+        except Exception as e: logger.error(f"Failed to send rank-up notification to {user_id}: {e}")
+    
+    save_to_json("user_data.json", USER_DATA)
 
 # --- HELPER & CORE BOT FUNCTIONS ---
 PHT = pytz.timezone('Asia/Manila')
@@ -240,9 +285,9 @@ def dashboard_route():
         user_info = USER_INFO_CACHE.get(user_id)
         if user_info:
             full_avatar_url = f"https://api.telegram.org/file/bot{TOKEN}/{user_info['avatar_url_path']}" if user_info['avatar_url_path'] else "https://i.imgur.com/jpfrJd3.png"
-            active_users.append({**user_info, 'is_muted': tracker_data['is_muted'], 'avatar_url': full_avatar_url})
+            active_users.append({**user_info, 'is_muted': tracker_data.get('is_muted', False), 'avatar_url': full_avatar_url})
     for log in USER_ACTIVITY:
-        time_diff = datetime.now(pytz.utc) - log['timestamp']
+        time_diff = datetime.now(pytz.utc) - datetime.fromisoformat(log['timestamp'])
         if time_diff.total_seconds() < 60: time_ago = f"{int(time_diff.total_seconds())}s"
         elif time_diff.total_seconds() < 3600: time_ago = f"{int(time_diff.total_seconds() / 60)}m"
         else: time_ago = f"{int(time_diff.total_seconds() / 3600)}h"
@@ -279,7 +324,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await context.bot.send_message(chat_id=admin_id, text=admin_msg, parse_mode=ParseMode.HTML)
             except Exception as e: logger.error(f"Failed to send approval notice to admin {admin_id}: {e}")
         return
-    if user.id in RESTRICTED_USERS: await update.message.reply_text("⚠️ Your account is restricted. You can refresh stock but cannot start a new tracker. Please contact an admin."); return
+    if user.id in RESTRICTED_USERS: await update.message.reply_text("⚠️ Your account is restricted. You can refresh stock but cannot start a new tracker."); return
     chat_id = user.id
     if chat_id in ACTIVE_TRACKERS: await update.message.reply_text("📡 Already tracking! Use /stop or /refresh."); return
     filters = [f.strip().lower() for f in " ".join(context.args).split('|') if f.strip()]
@@ -288,6 +333,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         LAST_SENT_DATA[chat_id] = initial_data; task = asyncio.create_task(tracking_loop(chat_id, context.bot, context, filters))
         ACTIVE_TRACKERS[chat_id] = {'task': task, 'filters': filters, 'is_muted': False, 'first_name': user.first_name}
         await context.bot.send_message(chat_id, text=f"✅ <b>Tracking started!</b>\nNotifications are <b>ON</b>. Use /mute to silence.", parse_mode=ParseMode.HTML)
+    await add_xp_and_check_rankup(user, 5, context)
 
 # --- ADMIN COMMANDS ---
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -295,16 +341,16 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id not in ADMIN_USERS: return
     await log_user_activity(user, "/admin", context.bot)
     keyboard = [[InlineKeyboardButton("👤 User Management", callback_data='admin_users_0')], [InlineKeyboardButton("📊 Bot Stats", callback_data='admin_stats')], [InlineKeyboardButton("❌ Close", callback_data='admin_close')]]
-    await update.message.reply_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
     admin_id = query.from_user.id
-    if admin_id not in ADMIN_USERS: await query.edit_message_text("❌ You are not authorized for this action."); return
+    if admin_id not in ADMIN_USERS: await query.edit_message_text("❌ Unauthorized action."); return
     data = query.data.split('_'); command, action = data[0], data[1]
     if command == "admin":
         if action == "users":
-            page = int(data[2]); users_per_page = 5; user_list = sorted(list(AUTHORIZED_USERS)); start_index, end_index = page * users_per_page, start_index + users_per_page
+            page = int(data[2]); users_per_page = 5; user_list = sorted(list(AUTHORIZED_USERS)); start_index, end_index = page * users_per_page, page * users_per_page + users_per_page
             keyboard = []
             for uid in user_list[start_index:end_index]:
                 user_info = USER_INFO_CACHE.get(uid, {'first_name': f'User {uid}'}); text = f"{user_info['first_name']} ({uid})"
@@ -329,9 +375,9 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 ]
                 await query.edit_message_text(f"<b>Managing:</b> {user_info['first_name']}{status_text}\n<b>ID:</b> <code>{target_id}</code>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
             else:
-                if target_id == BOT_OWNER_ID: await query.edit_message_text("❌ This action cannot be performed on the bot owner."); return
+                if target_id == BOT_OWNER_ID: await query.edit_message_text("❌ Cannot perform on bot owner."); return
                 text = ""
-                if action_type == "ban": BANNED_USERS.add(target_id); AUTHORIZED_USERS.discard(target_id); RESTRICTED_USERS.discard(target_id); save_to_file("banned_users.txt", BANNED_USERS); save_to_file("authorized_users.txt", AUTHORIZED_USERS); text=f"🚫 User {target_id} banned."
+                if action_type == "ban": BANNED_USERS.add(target_id); AUTHORIZED_USERS.discard(target_id); RESTRICTED_USERS.discard(target_id); save_to_file("banned_users.txt", BANNED_USERS); save_to_file("authorized_users.txt", AUTHORIZED_USERS); save_to_file("restricted_users.txt", RESTRICTED_USERS); text=f"🚫 User {target_id} banned."
                 elif action_type == "unban": BANNED_USERS.discard(target_id); AUTHORIZED_USERS.add(target_id); save_to_file("banned_users.txt", BANNED_USERS); save_to_file("authorized_users.txt", AUTHORIZED_USERS); text=f"✅ User {target_id} unbanned."
                 elif action_type == "restrict": RESTRICTED_USERS.add(target_id); save_to_file("restricted_users.txt", RESTRICTED_USERS); text=f"⚠️ User {target_id} restricted."
                 elif action_type == "unrestrict": RESTRICTED_USERS.discard(target_id); save_to_file("restricted_users.txt", RESTRICTED_USERS); text=f"✅ User {target_id} unrestricted."
@@ -343,8 +389,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data='admin_main')]]), parse_mode=ParseMode.HTML)
         elif action == "main": await admin_cmd(query, context)
         elif action == "close": await query.edit_message_text("Panel closed.")
-
-async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): #... (and other admin commands)
+async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
     if admin.id not in ADMIN_USERS: return
     await log_user_activity(admin, f"/approve {' '.join(context.args)}", context.bot)
@@ -352,6 +397,7 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): #... 
         target_id = int(context.args[0])
         if target_id in AUTHORIZED_USERS: await update.message.reply_text("User already authorized."); return
         AUTHORIZED_USERS.add(target_id); save_to_file("authorized_users.txt", AUTHORIZED_USERS)
+        USER_DATA[target_id] = {'xp': 0, 'rank': 'Newbie'}; save_to_json("user_data.json", USER_DATA)
         await update.message.reply_text(f"✅ User <code>{target_id}</code> authorized!", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=target_id, text="🎉 <b>You have been approved!</b>\nUse /start to begin.")
     except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/approve [user_id]</code>", parse_mode=ParseMode.HTML)
@@ -373,11 +419,31 @@ async def adminlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await log_user_activity(admin, "/adminlist", context.bot)
     admin_list_text = "<b>🛡️ Current Admins</b>\n\n"
     for uid in ADMIN_USERS:
-        user_info = USER_INFO_CACHE.get(uid, {'first_name': f'Admin', 'username': 'N/A'})
+        user_info = USER_INFO_CACHE.get(uid, {'first_name': f'Admin {uid}', 'username': 'N/A'})
         admin_list_text += f"• {user_info['first_name']} (@{user_info['username']}) - <code>{uid}</code>\n"
     await update.message.reply_html(admin_list_text)
+async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, f"/info {' '.join(context.args)}", context.bot)
+    try:
+        target_id = int(context.args[0])
+        user_info = USER_INFO_CACHE.get(target_id)
+        if not user_info: await context.bot.get_chat(target_id); await log_user_activity(await context.bot.get_chat(target_id), "info_lookup", context.bot); user_info = USER_INFO_CACHE.get(target_id)
+        user_data = USER_DATA.get(target_id, {'xp': 0, 'rank': 'Newbie'})
+        last_activity = next((log for log in USER_ACTIVITY if log['user_id'] == target_id), None)
+        status, status_emoji = "Active", "🟢"
+        if target_id in BANNED_USERS: status, status_emoji = "Banned", "🚫"
+        elif target_id in RESTRICTED_USERS: status, status_emoji = "Restricted", "⚠️"
+        elif target_id in ACTIVE_TRACKERS and ACTIVE_TRACKERS[target_id].get('is_muted'): status, status_emoji = "Muted", "🔇"
+        dossier = (f"📋 <b>User Dossier</b>\n\n<b>Name:</b> {user_info['first_name']} (@{user_info['username']})\n<b>ID:</b> <code>{target_id}</code>\n"
+                   f"━━━━━━━━━━━━━━\n<b>Rank:</b> {get_user_rank(user_data['xp'])['emoji']} {user_data.get('rank', 'Newbie')} ({user_data.get('xp', 0)} XP)\n"
+                   f"<b>Status:</b> {status_emoji} {status}\n")
+        if last_activity: dossier += f"<b>Last Seen:</b> {datetime.fromisoformat(last_activity['timestamp']).strftime('%Y-%m-%d %H:%M')} UTC (<code>{last_activity['command']}</code>)"
+        await update.message.reply_html(dossier)
+    except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/info [user_id]</code>", parse_mode=ParseMode.HTML)
+    except Exception as e: await update.message.reply_text(f"Could not retrieve info. User may not have started the bot. Error: {e}")
 
-# --- REGULAR USER COMMANDS ---
 async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user;
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
@@ -389,16 +455,18 @@ async def refresh_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
     await log_user_activity(user, "/refresh", context.bot); filters = ACTIVE_TRACKERS.get(user.id, {}).get('filters', [])
     await send_full_stock_report(update, context, filters)
+    await add_xp_and_check_rankup(user, 2, context)
 async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
     await log_user_activity(user, "/recent", context.bot)
     chat_data = LAST_SENT_DATA.get(user.id)
-    if not chat_data or not chat_data.get("stock"): await update.message.reply_text("I don't have recent data. Please run /start or /refresh."); return
+    if not chat_data or not chat_data.get("stock"): await update.message.reply_text("No recent data. Please run /start or /refresh."); return
     recent_items = [items[0] for items in chat_data["stock"].values() if items]
     if not recent_items: await update.message.reply_text("Stock is empty."); return
     message = "<b>📈 Most Recent Stock Items</b>\n\n" + "\n".join([f"• {add_emoji(i['name'])}: {format_value(i['value'])}" for i in recent_items])
     await update.message.reply_html(message)
+    await add_xp_and_check_rankup(user, 1, context)
 async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user;
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
@@ -421,11 +489,14 @@ async def dashboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🔒 Your admin dashboard is ready.\n\nPlease log in here: {dashboard_url}", disable_web_page_preview=True)
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: await start_cmd(update, context); return
+    if user.id in BANNED_USERS: return
+    if user.id not in AUTHORIZED_USERS: await start_cmd(update, context); return
     await log_user_activity(user, "/help", context.bot)
-    help_text = "<b>Welcome to the GAG Prized Stock Alerter!</b>\n\n▶️  <b>/start</b> - Starts tracking.\n🔄  <b>/refresh</b> - Shows current stock.\n📈  <b>/recent</b> - Shows recent items.\n🔇  <b>/mute</b> - Silence notifications.\n🔊  <b>/unmute</b> - Resume notifications.\n⏹️  <b>/stop</b> - Stops the tracker.\n\n"
+    user_data = USER_DATA.get(user.id, {'xp': 0})
+    rank_info = get_user_rank(user_data.get('xp', 0))
+    help_text = f"<b>Welcome, {rank_info['emoji']} {user.first_name}!</b>\n\n▶️  /start\n🔄  /refresh\n📈  /recent\n🔇  /mute\n🔊  /unmute\n⏹️  /stop\n\n"
     if user.id in ADMIN_USERS:
-        help_text += "<b>Admin Commands:</b>\n🛡️  <b>/admin</b> - Open the admin control panel."
+        help_text += "<b>Admin Commands:</b>\n🛡️  /admin\nℹ️  /info [user_id]\n"
     await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 async def check_for_updates(application: Application):
     global LAST_KNOWN_VERSION
@@ -434,7 +505,7 @@ async def check_for_updates(application: Application):
         if LAST_KNOWN_VERSION != "":
             for chat_id, tracker_data in list(ACTIVE_TRACKERS.items()):
                 user_name = tracker_data.get('first_name', 'there')
-                update_message = f"👋 Hi, <b>{user_name}</b>!\n\n🚀 <b>Bot Update Deployed!</b> (v{BOT_VERSION})\n\nI've just been upgraded with new features and stability improvements to better track your items.\n\nYou can check out the <code>/help</code> command for any changes. No action is needed from you!"
+                update_message = f"👋 Hi, <b>{user_name}</b>!\n\n🚀 <b>Bot Update Deployed!</b> (v{BOT_VERSION})\n\nI've been upgraded with new features and stability improvements. Check out <code>/help</code> for any changes!"
                 try: await application.bot.send_animation(chat_id=chat_id, animation=UPDATE_GIF_URL, caption=update_message, parse_mode=ParseMode.HTML)
                 except Exception as e: logger.error(f"Failed to send update notice to {chat_id}: {e}")
         with open("version.txt", "w") as f: f.write(BOT_VERSION)
@@ -443,7 +514,7 @@ async def check_for_updates(application: Application):
 def main():
     if not TOKEN: logger.critical("TELEGRAM_TOKEN not set!"); return
     if not BOT_OWNER_ID: logger.critical("BOT_OWNER_ID not set!"); return
-    load_all_users()
+    load_all_data()
     Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': int(os.environ.get('PORT', 8080))}, daemon=True).start()
     
     global application
@@ -454,12 +525,12 @@ def main():
     application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd))
     application.add_handler(CommandHandler("dashboard", dashboard_cmd)); application.add_handler(CommandHandler("recent", recent_cmd))
     application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd))
-    application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd))
+    application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("info", info_cmd))
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     
     application.job_queue.run_once(check_for_updates, 5)
 
-    logger.info("Bot with Ultimate Admin Features is running...")
+    logger.info("Bot with Prestige Features is running...")
     application.run_polling()
 
 if __name__ == '__main__':
