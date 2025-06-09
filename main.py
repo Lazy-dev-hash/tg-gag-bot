@@ -35,16 +35,33 @@ USER_ACTIVITY = []
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# --- NEW: Robust and Decoupled Async Logger (The Fix) ---
 async def log_user_activity(user: User, command: str, bot: Bot):
+    """Safely fetches user data and logs it for the dashboard."""
     if not user: return
-    avatar_url = "https://i.imgur.com/jpfrJd3.png"
+
+    avatar_url = "https://i.imgur.com/jpfrJd3.png" # Default avatar
     try:
-        profile_photos = await bot.get_user_profile_photos(user.id, limit=1)
-        if profile_photos and profile_photos.photos: avatar_url = (await profile_photos.photos[0][0].get_file()).file_path
-    except Exception as e: logger.warning(f"Could not fetch avatar for {user.id}: {e}")
-    activity_log = {"user_id": user.id, "first_name": user.first_name, "username": user.username or "N/A", "command": command, "timestamp": datetime.now(pytz.utc), "avatar_url": avatar_url}
-    USER_ACTIVITY.insert(0, activity_log); del USER_ACTIVITY[50:]
+        # This block is now much more defensive to prevent any crashes
+        if user:
+            profile_photos = await bot.get_user_profile_photos(user.id, limit=1)
+            # Check if the photos object and the photo list itself are not empty
+            if profile_photos and profile_photos.photos and profile_photos.photos[0]:
+                avatar_file = await profile_photos.photos[0][0].get_file()
+                # Construct the full, public URL required by browsers
+                avatar_url = f"https://api.telegram.org/file/bot{TOKEN}/{avatar_file.file_path}"
+    except Exception as e:
+        logger.warning(f"Could not fetch avatar for {user.id}. Using default. Error: {e}")
+
+    # This part is now guaranteed to run, even if the avatar fetch fails
+    activity_log = {
+        "user_id": user.id, "first_name": user.first_name, "username": user.username or "N/A",
+        "command": command, "timestamp": datetime.now(pytz.utc), "avatar_url": avatar_url
+    }
+    USER_ACTIVITY.insert(0, activity_log)
+    del USER_ACTIVITY[50:]
     logger.info(f"Logged activity for {user.first_name}: {command}")
+
 
 # --- HELPER & FORMATTING FUNCTIONS (Unchanged) ---
 PHT = pytz.timezone('Asia/Manila')
@@ -137,82 +154,9 @@ async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TY
         if chat_id in ACTIVE_TRACKERS: del ACTIVE_TRACKERS[chat_id]
         if chat_id in LAST_SENT_DATA: del LAST_SENT_DATA[chat_id]
 
-# --- NEW: AESTHETIC HTML TEMPLATES ---
-DASHBOARD_HTML = """
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Bot Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/tsparticles-slim@2.12.0/tsparticles.slim.bundle.min.js"></script>
-<style>
-:root{--bg:#0d1117;--primary:#c9a4ff;--secondary:#58a6ff;--surface:#161b22;--on-surface:#e6edf3;--border:#21262d;--red:#f85149;}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background-color:var(--bg);color:var(--on-surface);margin:0;padding:1.5rem;overflow-x:hidden;}
-#tsparticles{position:fixed;top:0;left:0;width:100%;height:100%;z-index:-1;}
-.container{max-width:1100px;margin:auto;animation:fadeIn 0.8s ease-out;}.header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:1rem;margin-bottom:2rem;}
-h1{font-weight:600;color:white;margin:0;font-size:1.8rem;letter-spacing:-1px;}
-.logout-btn{color:var(--red);text-decoration:none;background-color:rgba(248,81,73,0.1);padding:10px 15px;border-radius:6px;border:1px solid var(--red);font-weight:500;transition:all 0.2s;}
-.logout-btn:hover{background-color:rgba(248,81,73,0.2);transform:translateY(-2px);}
-.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1.5rem;margin-bottom:2.5rem;}
-.stat-card{background:linear-gradient(145deg,rgba(255,255,255,0.05),rgba(255,255,255,0));backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);padding:1.5rem;border-radius:12px;border:1px solid var(--border);display:flex;align-items:center;gap:1.5rem;transition:all 0.3s ease;}
-.stat-card:hover{transform:translateY(-5px);box-shadow:0 10px 20px rgba(0,0,0,0.2);}
-.stat-card .icon{font-size:1.8rem;color:var(--primary);background:linear-gradient(145deg,rgba(201,164,255,0.1),rgba(201,164,255,0.2));width:60px;height:60px;border-radius:50%;display:grid;place-items:center;}
-.stat-card .value{font-size:2.8rem;font-weight:700;color:white;}.stat-card .label{font-size:1rem;color:#8b949e;}
-h2{color:white;border-bottom:1px solid var(--border);padding-bottom:10px;margin:2.5rem 0 1.5rem 0;font-weight:600;}
-.activity-log{background-color:var(--surface);border-radius:12px;border:1px solid var(--border);overflow:hidden;box-shadow:0 5px 15px rgba(0,0,0,0.1);}
-table{width:100%;border-collapse:collapse;}
-th,td{text-align:left;padding:16px 20px;}
-th{background-color:rgba(187,134,252,0.05);color:var(--primary);font-weight:600;text-transform:uppercase;font-size:0.8rem;letter-spacing:0.5px;}
-tbody tr{border-bottom:1px solid var(--border);transition:background-color 0.2s;}
-tbody tr:last-child{border-bottom:none;}
-tbody tr:hover{background-color:rgba(88,166,255,0.08);}
-.user-cell{display:flex;align-items:center;gap:15px;}
-.user-cell img{width:45px;height:45px;border-radius:50%;border:2px solid var(--border);}
-.user-cell .name{font-weight:600;color:white;}
-.user-cell .username{color:#8b949e;font-size:0.9em;}
-code{background-color:#2b2b2b;color:var(--secondary);padding:4px 8px;border-radius:4px;font-family:"SF Mono","Fira Code",monospace;}
-@keyframes fadeIn{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
-@media(max-width:768px){body{padding:1rem;}.header,h1{flex-direction:column;gap:1rem;text-align:center;}.stats-grid{grid-template-columns:1fr;}td,th{padding:12px 10px;}h1{font-size:1.5rem;}.stat-card .value{font-size:2.2rem;}}
-</style>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-</head><body><div id="tsparticles"></div><div class="container">
-<div class="header"><h1><i class="fa-solid fa-shield-halved"></i> GAG Bot Dashboard</h1><a href="/logout" class="logout-btn"><i class="fa-solid fa-arrow-right-from-bracket"></i> Logout</a></div>
-<div class="stats-grid"><div class="stat-card"><div class="icon"><i class="fa-solid fa-satellite-dish"></i></div><div><div class="value" data-target="{{ stats.active_trackers }}">0</div><div class="label">Active Trackers</div></div></div><div class="stat-card"><div class="icon"><i class="fa-solid fa-users"></i></div><div><div class="value" data-target="{{ stats.unique_users }}">0</div><div class="label">Recent Unique Users</div></div></div></div>
-<h2><i class="fa-solid fa-chart-line"></i> Recent Activity</h2>
-<div class="activity-log"><table><thead><tr><th>User</th><th>Command</th><th>Time</th></tr></thead><tbody>
-{% for log in activity %}
-<tr><td><div class="user-cell"><img src="{{ log.avatar_url }}" alt="Avatar"><div><div class="name">{{ log.first_name }}</div><div class="username">@{{ log.username }}</div></div></div></td><td><code>{{ log.command }}</code></td><td>{{ log.time_ago }} ago</td></tr>
-{% endfor %}
-</tbody></table></div></div>
-<script>
-document.addEventListener("DOMContentLoaded", function() {
-  tsParticles.load("tsparticles", { preset: "stars", background: { color: { value: "#0d1117" } }, particles: { color: { value: "#ffffff" }, links: { color: "#ffffff", distance: 150, enable: true, opacity: 0.1, width: 1 }, move: { enable: true, speed: 0.5 }, number: { density: { enable: true, area: 800 }, value: 40 } } });
-  const counters = document.querySelectorAll('.value');
-  counters.forEach(counter => {
-    const target = +counter.getAttribute('data-target');
-    const duration = 1500;
-    let start = 0;
-    const stepTime = Math.abs(Math.floor(duration / target));
-    const timer = setInterval(() => {
-      start += 1;
-      counter.innerText = start;
-      if (start === target) { clearInterval(timer); }
-    }, stepTime > 0 ? stepTime : 1);
-  });
-});
-</script>
-</body></html>
-"""
-LOGIN_HTML = """
-<!DOCTYPE html><html><head><title>Admin Login</title><style>
-:root { --bg: #0d1117; --primary: #c9a4ff; --surface: #161b22; --border: #21262d; --red: #f85149; }
-body { display:flex; justify-content:center; align-items:center; height:100vh; background-color:var(--bg); color:white; font-family: -apple-system, sans-serif; }
-.login-box { background-color: var(--surface); padding: 40px; border-radius: 12px; border: 1px solid var(--border); text-align: center; width: 340px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); animation: fadeIn 0.5s ease-out; }
-h2 { color: var(--primary); margin-top: 0; margin-bottom: 25px; font-weight: 600; letter-spacing: -0.5px; }
-input { width: 100%; box-sizing: border-box; padding: 14px; margin-bottom: 15px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: white; font-size: 1rem; transition: border-color 0.2s; }
-input:focus { border-color: var(--primary); outline: none; }
-button { width: 100%; padding: 14px; background: linear-gradient(90deg, var(--primary), #9a66e2); color: black; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 1rem; transition: all 0.2s; }
-button:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(201,164,255,0.2); }
-.error { color: var(--red); background-color: rgba(248,81,73,0.1); padding: 10px; border-radius: 6px; margin-top: 15px; border: 1px solid var(--red); }
-@keyframes fadeIn{from{opacity:0;transform:scale(0.95);}to{opacity:1;transform:scale(1);}}
-</style></head><body><div class="login-box"><form method="post"><h2>Bot Dashboard Login</h2><input type="text" name="username" placeholder="Username" required><input type="password" name="password" placeholder="Password" required><button type="submit">Login</button>{% if error %}<p class="error">{{ error }}</p>{% endif %}</form></div></body></html>
-"""
+# --- AESTHETIC HTML TEMPLATES (Unchanged) ---
+DASHBOARD_HTML = """<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Bot Dashboard</title><script src="https://cdn.jsdelivr.net/npm/tsparticles-slim@2.12.0/tsparticles.slim.bundle.min.js"></script><style>:root{--bg:#0d1117;--primary:#c9a4ff;--secondary:#58a6ff;--surface:#161b22;--on-surface:#e6edf3;--border:#21262d;--red:#f85149;}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background-color:var(--bg);color:var(--on-surface);margin:0;padding:1.5rem;overflow-x:hidden;}#tsparticles{position:fixed;top:0;left:0;width:100%;height:100%;z-index:-1;}.container{max-width:1100px;margin:auto;animation:fadeIn 0.8s ease-out;}.header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:1rem;margin-bottom:2rem;}h1{font-weight:600;color:white;margin:0;font-size:1.8rem;letter-spacing:-1px;}.logout-btn{color:var(--red);text-decoration:none;background-color:rgba(248,81,73,0.1);padding:10px 15px;border-radius:6px;border:1px solid var(--red);font-weight:500;transition:all 0.2s;}.logout-btn:hover{background-color:rgba(248,81,73,0.2);transform:translateY(-2px);}.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1.5rem;margin-bottom:2.5rem;}.stat-card{background:linear-gradient(145deg,rgba(255,255,255,0.05),rgba(255,255,255,0));backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);padding:1.5rem;border-radius:12px;border:1px solid var(--border);display:flex;align-items:center;gap:1.5rem;transition:all 0.3s ease;}.stat-card:hover{transform:translateY(-5px);box-shadow:0 10px 20px rgba(0,0,0,0.2);}.stat-card .icon{font-size:1.8rem;color:var(--primary);background:linear-gradient(145deg,rgba(201,164,255,0.1),rgba(201,164,255,0.2));width:60px;height:60px;border-radius:50%;display:grid;place-items:center;}.stat-card .value{font-size:2.8rem;font-weight:700;color:white;}.stat-card .label{font-size:1rem;color:#8b949e;}h2{color:white;border-bottom:1px solid var(--border);padding-bottom:10px;margin:2.5rem 0 1.5rem 0;font-weight:600;}.activity-log{background-color:var(--surface);border-radius:12px;border:1px solid var(--border);overflow:hidden;box-shadow:0 5px 15px rgba(0,0,0,0.1);}table{width:100%;border-collapse:collapse;}th,td{text-align:left;padding:16px 20px;}th{background-color:rgba(187,134,252,0.05);color:var(--primary);font-weight:600;text-transform:uppercase;font-size:0.8rem;letter-spacing:0.5px;}tbody tr{border-bottom:1px solid var(--border);transition:background-color 0.2s;}tbody tr:last-child{border-bottom:none;}tbody tr:hover{background-color:rgba(88,166,255,0.08);}.user-cell{display:flex;align-items:center;gap:15px;}.user-cell img{width:45px;height:45px;border-radius:50%;border:2px solid var(--border);}.user-cell .name{font-weight:600;color:white;}.user-cell .username{color:#8b949e;font-size:0.9em;}code{background-color:#2b2b2b;color:var(--secondary);padding:4px 8px;border-radius:4px;font-family:"SF Mono","Fira Code",monospace;}@keyframes fadeIn{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}@media(max-width:768px){body{padding:1rem;}.header,h1{flex-direction:column;gap:1rem;text-align:center;}.stats-grid{grid-template-columns:1fr;}td,th{padding:12px 10px;}h1{font-size:1.5rem;}.stat-card .value{font-size:2.2rem;}}</style><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"></head><body><div id="tsparticles"></div><div class="container"><div class="header"><h1><i class="fa-solid fa-shield-halved"></i> GAG Bot Dashboard</h1><a href="/logout" class="logout-btn"><i class="fa-solid fa-arrow-right-from-bracket"></i> Logout</a></div><div class="stats-grid"><div class="stat-card"><div class="icon"><i class="fa-solid fa-satellite-dish"></i></div><div><div class="value" data-target="{{ stats.active_trackers }}">0</div><div class="label">Active Trackers</div></div></div><div class="stat-card"><div class="icon"><i class="fa-solid fa-users"></i></div><div><div class="value" data-target="{{ stats.unique_users }}">0</div><div class="label">Recent Unique Users</div></div></div></div><h2><i class="fa-solid fa-chart-line"></i> Recent Activity</h2><div class="activity-log"><table><thead><tr><th>User</th><th>Command</th><th>Time</th></tr></thead><tbody>{% for log in activity %}<tr><td><div class="user-cell"><img src="{{ log.avatar_url }}" alt="Avatar"><div><div class="name">{{ log.first_name }}</div><div class="username">@{{ log.username }}</div></div></div></td><td><code>{{ log.command }}</code></td><td>{{ log.time_ago }} ago</td></tr>{% endfor %}</tbody></table></div></div><script>document.addEventListener("DOMContentLoaded",function(){tsParticles.load("tsparticles",{preset:"stars",background:{color:{value:"#0d1117"}},particles:{color:{value:"#ffffff"},links:{color:"#ffffff",distance:150,enable:!0,opacity:.1,width:1},move:{enable:!0,speed:.5},number:{density:{enable:!0,area:800},value:40}}});const e=document.querySelectorAll(".value");e.forEach(e=>{const t=+e.getAttribute("data-target"),o=1500;let a=0;const l=Math.abs(Math.floor(o/t)),n=setInterval(()=>{a+=1,e.innerText=a,a===t&&clearInterval(n)},l>0?l:1)})});</script></body></html>"""
+LOGIN_HTML = """<!DOCTYPE html><html><head><title>Admin Login</title><style>:root{--bg:#0d1117;--primary:#c9a4ff;--surface:#161b22;--border:#21262d;--red:#f85149;}body{display:flex;justify-content:center;align-items:center;height:100vh;background-color:var(--bg);color:white;font-family:-apple-system,sans-serif;}.login-box{background-color:var(--surface);padding:40px;border-radius:12px;border:1px solid var(--border);text-align:center;width:340px;box-shadow:0 10px 30px rgba(0,0,0,0.2);animation:fadeIn 0.5s ease-out;}h2{color:var(--primary);margin-top:0;margin-bottom:25px;font-weight:600;letter-spacing:-0.5px;}input{width:100%;box-sizing:border-box;padding:14px;margin-bottom:15px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:white;font-size:1rem;transition:border-color 0.2s;}input:focus{border-color:var(--primary);outline:none;}button{width:100%;padding:14px;background:linear-gradient(90deg,var(--primary),#9a66e2);color:black;border:none;border-radius:8px;cursor:pointer;font-weight:bold;font-size:1rem;transition:all 0.2s;}button:hover{transform:translateY(-2px);box-shadow:0 4px 15px rgba(201,164,255,0.2);}.error{color:var(--red);background-color:rgba(248,81,73,0.1);padding:10px;border-radius:6px;margin-top:15px;border:1px solid var(--red);}@keyframes fadeIn{from{opacity:0;transform:scale(0.95);}to{opacity:1;transform:scale(1);}}</style></head><body><div class="login-box"><form method="post"><h2>Bot Dashboard Login</h2><input type="text" name="username" placeholder="Username" required><input type="password" name="password" placeholder="Password" required><button type="submit">Login</button>{% if error %}<p class="error">{{ error }}</p>{% endif %}</form></div></body></html>"""
 
 # --- FLASK WEB ROUTES (STABLE & DECOUPLED) ---
 @app.route('/')
@@ -240,9 +184,8 @@ def dashboard_route():
 @app.route('/logout')
 def logout_route(): session.pop('logged_in', None); return redirect(url_for('login_route'))
 
-# --- TELEGRAM COMMAND HANDLERS ---
+# --- TELEGRAM COMMAND HANDLERS (Unchanged) ---
 async def send_full_stock_report(update: Update, context: ContextTypes.DEFAULT_TYPE, filters: list[str]):
-    # ... same as before
     loader_message = await update.message.reply_text("⏳ Fetching all stock categories...")
     data = await fetch_all_data()
     if not data: await loader_message.edit_text("⚠️ Could not fetch data."); return None
@@ -250,10 +193,7 @@ async def send_full_stock_report(update: Update, context: ContextTypes.DEFAULT_T
     sent_anything = False
     for category_name, items in data["stock"].items():
         items_to_show = [item for item in items if not filters or any(f in item['name'].lower() for f in filters)]
-        if items_to_show:
-            sent_anything = True
-            category_message = format_category_message(category_name, items_to_show, restock_timers.get(category_name, "N/A"), weather_info)
-            await context.bot.send_message(update.effective_chat.id, text=category_message, parse_mode=ParseMode.HTML)
+        if items_to_show: sent_anything = True; category_message = format_category_message(category_name, items_to_show, restock_timers.get(category_name, "N/A"), weather_info); await context.bot.send_message(update.effective_chat.id, text=category_message, parse_mode=ParseMode.HTML)
     if not sent_anything and filters: await context.bot.send_message(update.effective_chat.id, text="Your filter didn't match any items.")
     await loader_message.delete()
     if sent_anything: await send_music_vm(context, update.effective_chat.id)
@@ -298,14 +238,14 @@ def main():
     if not TOKEN: logger.critical("TELEGRAM_TOKEN not set!"); return
     Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': int(os.environ.get('PORT', 8080))}, daemon=True).start()
     
-    global application # Make application instance globally accessible for the dashboard
+    global application
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd))
     application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd))
     application.add_handler(CommandHandler("dashboard", dashboard_cmd))
     
-    logger.info("Bot and ENHANCED Dashboard are running...")
+    logger.info("Bot and AESTHETIC Dashboard are running...")
     application.run_polling()
 
 if __name__ == '__main__':
