@@ -5,47 +5,55 @@ import yt_dlp
 from datetime import datetime, timedelta
 import pytz
 import httpx
-from flask import Flask
+from flask import Flask, render_template_string, request, session, redirect, url_for
 from threading import Thread
 
-from telegram import Update, Bot
+from telegram import Update, Bot, User
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# --- WEB SERVER FOR 24/7 UPTIME ---
-app = Flask('')
-@app.route('/')
-def home():
-    return "Bot is alive and running!"
-
-def run_flask():
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = Thread(target=run_flask)
-    t.start()
-# --- END OF WEB SERVER CODE ---
+# --- WEB SERVER & DASHBOARD SETUP ---
+app = Flask(__name__)
+# Load secrets for Flask session and admin login
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'default-secret-key-change-me')
+ADMIN_USER = os.environ.get('ADMIN_USER', 'admin')
+ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 # --- CONFIGURATION ---
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
 API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
 TRACKING_INTERVAL_SECONDS = 45
-MULTOMUSIC_URL = "https://youtu.be/Rht8rS4cR1s?si=ELIsHKV1Mzt8RyY2"
-
+MULTOMUSIC_URL = "https://www.youtube.com/watch?v=sPma_hV4_sU"
 PRIZED_ITEMS = ["master sprinkler", "beanstalk", "advanced sprinkler", "godly sprinkler", "ember lily"]
 
 # --- GLOBAL STATE MANAGEMENT ---
-# MODIFIED: Tracker now includes 'is_muted' state
 ACTIVE_TRACKERS = {}
 LAST_SENT_DATA = {}
+USER_ACTIVITY = [] # NEW: For dashboard activity log
 
 # --- LOGGING SETUP ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- HELPER & FORMATTING FUNCTIONS (Unchanged) ---
+# --- NEW: Dashboard Activity Logger ---
+def log_user_activity(user: User, command: str):
+    """Logs user actions for the dashboard."""
+    if not user: return
+    activity_log = {
+        "user_id": user.id,
+        "first_name": user.first_name,
+        "username": user.username or "N/A",
+        "command": command,
+        "timestamp": datetime.now(pytz.utc) # Use UTC for consistency
+    }
+    # Add to the beginning of the list and keep it trimmed to the last 50 activities
+    USER_ACTIVITY.insert(0, activity_log)
+    del USER_ACTIVITY[50:]
+    logger.info(f"Logged activity for {user.first_name}: {command}")
+
+
+# --- HELPER & FORMATTING FUNCTIONS ---
 PHT = pytz.timezone('Asia/Manila')
 def get_ph_time() -> datetime: return datetime.now(PHT)
 def get_countdown(target: datetime) -> str:
@@ -54,17 +62,18 @@ def get_countdown(target: datetime) -> str:
     total_seconds = int(time_left.total_seconds())
     h, m, s = total_seconds // 3600, (total_seconds % 3600) // 60, total_seconds % 60
     return f"{h:02}h {m:02}m {s:02}s"
+
 def get_all_restock_timers() -> dict:
     now = get_ph_time(); timers = {}
     next_egg = now.replace(second=0, microsecond=0)
     if now.minute < 30: next_egg = next_egg.replace(minute=30)
     else: next_egg = (next_egg + timedelta(hours=1)).replace(minute=0)
-    timers['Eggs'] = get_countdown(next_egg)
+    timers['Egg'] = get_countdown(next_egg) # FIXED: Use singular key
     next_5 = now.replace(second=0, microsecond=0)
     next_m = (now.minute // 5 + 1) * 5
     if next_m >= 60: next_5 = (next_5 + timedelta(hours=1)).replace(minute=0)
     else: next_5 = next_5.replace(minute=next_m)
-    timers['Gear'] = timers['Seeds'] = get_countdown(next_5)
+    timers['Gear'] = timers['Seed'] = get_countdown(next_5) # FIXED: Use singular keys
     next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
     timers['Honey'] = get_countdown(next_hour)
     next_7 = now.replace(minute=0, second=0, microsecond=0)
@@ -73,6 +82,7 @@ def get_all_restock_timers() -> dict:
     else: next_7 = next_7.replace(hour=next_7h)
     timers['Cosmetics'] = get_countdown(next_7)
     return timers
+
 def format_value(val: int) -> str:
     if val >= 1_000_000: return f"x{val / 1_000_000:.1f}M"
     if val >= 1_000: return f"x{val / 1_000:.1f}K"
@@ -80,26 +90,25 @@ def format_value(val: int) -> str:
 def add_emoji(name: str) -> str:
     emojis = {"Common Egg": "🥚", "Uncommon Egg": "🐣", "Rare Egg": "🍳", "Legendary Egg": "🪺", "Mythical Egg": "🥚", "Bug Egg": "🪲", "Watering Can": "🚿", "Trowel": "🛠️", "Recall Wrench": "🔧", "Basic Sprinkler": "💧", "Advanced Sprinkler": "💦", "Godly Sprinkler": "⛲", "Lightning Rod": "⚡", "Master Sprinkler": "🌊", "Favorite Tool": "❤️", "Harvest Tool": "🌾", "Carrot": "🥕", "Strawberry": "🍓", "Blueberry": "🫐", "Orange Tulip": "🌷", "Tomato": "🍅", "Corn": "🌽", "Daffodil": "🌼", "Watermelon": "🍉", "Pumpkin": "🎃", "Apple": "🍎", "Bamboo": "🎍", "Coconut": "🥥", "Cactus": "🌵", "Dragon Fruit": "🍈", "Mango": "🥭", "Grape": "🍇", "Mushroom": "🍄", "Pepper": "🌶️", "Cacao": "🍫", "Beanstalk": "🌱", "Ember Lily": "🔥"}
     return f"{emojis.get(name, '❔')} {name}"
-def format_category_message(category_name: str, items: list, restock_timer: str) -> str:
-    header_emojis = {"Gear": "🛠️", "Seeds": "🌱", "Eggs": "🥚", "Cosmetics": "🎨", "Honey": "🍯"}
+
+def format_category_message(category_name: str, items: list, restock_timer: str, weather_info: str) -> str:
+    header_emojis = {"Gear": "🛠️", "Seed": "🌱", "Egg": "🥚", "Cosmetics": "🎨", "Honey": "🍯"}
     header = f"{header_emojis.get(category_name, '📦')} <b>Grow A Garden — {category_name} Stock</b>"
     item_list = "\n".join([f"• {add_emoji(i['name'])}: {format_value(i['value'])}" for i in items]) if items else "<i>No items currently in stock.</i>"
-    return f"{header}\n\n{item_list}\n\n⏳ Restock in: {restock_timer}"
+    return f"{header}\n\n{item_list}\n\n⏳ Restock in: {restock_timer}\n{weather_info}"
+
 async def send_music_vm(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    # ... (This function remains unchanged)
     logger.info(f"Preparing to send music to {chat_id}")
     try:
         ydl_opts = {'format': 'bestaudio/best', 'outtmpl': f'{chat_id}_%(title)s.%(ext)s', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}], 'quiet': True}
         loop = asyncio.get_running_loop()
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = await loop.run_in_executor(None, lambda: ydl.extract_info(MULTOMUSIC_URL, download=True))
-            filename = ydl.prepare_filename(info).replace('.webm', '.mp3').replace('.m4a', '.mp3')
-        logger.info(f"Downloaded '{filename}', sending now...")
-        await context.bot.send_audio(chat_id=chat_id, audio=open(filename, 'rb'), title="Multo", performer="Cup of Joe")
-        os.remove(filename)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl: info = await loop.run_in_executor(None, lambda: ydl.extract_info(MULTOMUSIC_URL, download=True)); filename = ydl.prepare_filename(info).replace('.webm', '.mp3').replace('.m4a', '.mp3')
+        await context.bot.send_audio(chat_id=chat_id, audio=open(filename, 'rb'), title="Multo", performer="Cup of Joe"); os.remove(filename)
     except Exception as e: logger.error(f"Failed to send music to {chat_id}: {e}")
 
-# --- CORE BOT LOGIC ---
-async def fetch_all_data() -> dict | None:
+# --- CORE BOT LOGIC (Unchanged) ---
+async def fetch_all_data() -> dict | None: #... (same as before)
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             stock_res, weather_res = await asyncio.gather(client.get(API_STOCK_URL), client.get(API_WEATHER_URL))
@@ -112,169 +121,260 @@ async def fetch_all_data() -> dict | None:
             return all_data
     except Exception as e: logger.error(f"Error fetching all data: {e}"); return None
 
-async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TYPE, filters: list[str]):
+async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TYPE, filters: list[str]): #... (same as before)
     logger.info(f"Starting tracking for chat_id: {chat_id}")
     try:
         while True:
             await asyncio.sleep(TRACKING_INTERVAL_SECONDS)
-            
-            # MODIFIED: Check mute status at the start of each loop iteration
-            tracker_info = ACTIVE_TRACKERS.get(chat_id)
-            if not tracker_info: break # Stop if tracker was removed
-            is_muted = tracker_info.get('is_muted', False)
-
+            tracker_info = ACTIVE_TRACKERS.get(chat_id); is_muted = tracker_info.get('is_muted', False) if tracker_info else True
             new_data = await fetch_all_data()
             if not new_data: continue
             old_data = LAST_SENT_DATA.get(chat_id, {"stock": {}})
-
-            # --- Prized Item Detection ---
             old_prized = {item['name'] for cat in old_data['stock'].values() for item in cat if item['name'].lower() in PRIZED_ITEMS}
             new_prized = {item['name'] for cat in new_data['stock'].values() for item in cat if item['name'].lower() in PRIZED_ITEMS}
             just_appeared_prized = new_prized - old_prized
-
-            if just_appeared_prized and not is_muted: # <-- MUTE CHECK
+            if just_appeared_prized and not is_muted:
                 item_details = [item for cat in new_data['stock'].values() for item in cat if item['name'] in just_appeared_prized]
                 alert_list = "\n".join([f"› {add_emoji(i['name'])}: {format_value(i['value'])}" for i in item_details])
                 alert_message = f"🚨 <b>PRIZED ITEM ALERT!</b> 🚨\n\n{alert_list}"
-                try:
-                    await bot.send_message(chat_id, text=alert_message, parse_mode=ParseMode.HTML)
-                    await send_music_vm(context, chat_id)
+                try: await bot.send_message(chat_id, text=alert_message, parse_mode=ParseMode.HTML); await send_music_vm(context, chat_id)
                 except Exception as e: logger.error(f"Failed prized alert to {chat_id}: {e}")
-
-            # --- General Category Restock Detection ---
             for category_name, new_items in new_data["stock"].items():
-                old_items_set = {frozenset(item.items()) for item in old_data["stock"].get(category_name, [])}
-                new_items_set = {frozenset(item.items()) for item in new_items}
-
+                old_items_set = {frozenset(item.items()) for item in old_data["stock"].get(category_name, [])}; new_items_set = {frozenset(item.items()) for item in new_items}
                 if old_items_set != new_items_set:
                     if len(new_items_set - old_items_set) == 1 and any(item['name'] in just_appeared_prized for item in new_items): continue
-                    
-                    if not is_muted: # <-- MUTE CHECK
+                    if not is_muted:
                         items_to_show = [item for item in new_items if not filters or any(f in item['name'].lower() for f in filters)]
                         if items_to_show:
-                            restock_timers = get_all_restock_timers()
-                            weather = new_data['weather']
-                            weather_info = f"🌤️ Weather: {weather.get('icon', '')} {weather.get('currentWeather', 'N/A')}"
-                            category_message = format_category_message(category_name, items_to_show, restock_timers.get(category_name, "N/A"))
-                            alert_message = f"🔄 <b>{category_name} has been updated!</b>\n\n{category_message}\n\n{weather_info}"
-                            try:
-                                await bot.send_message(chat_id, text=alert_message, parse_mode=ParseMode.HTML)
+                            restock_timers = get_all_restock_timers(); weather = new_data['weather']; weather_info = f"🌤️ Weather: {weather.get('icon', '')} {weather.get('currentWeather', 'N/A')}"
+                            category_message = format_category_message(category_name, items_to_show, restock_timers.get(category_name, "N/A"), weather_info)
+                            alert_message = f"🔄 <b>{category_name} has been updated!</b>"
+                            try: await bot.send_message(chat_id, text=alert_message, parse_mode=ParseMode.HTML); await bot.send_message(chat_id, text=category_message, parse_mode=ParseMode.HTML)
                             except Exception as e: logger.error(f"Failed category alert to {chat_id}: {e}")
-
             LAST_SENT_DATA[chat_id] = new_data
-    except asyncio.CancelledError:
-        logger.info(f"Tracking loop for {chat_id} cancelled.")
+    except asyncio.CancelledError: logger.info(f"Tracking loop for {chat_id} cancelled.")
     finally:
         if chat_id in ACTIVE_TRACKERS: del ACTIVE_TRACKERS[chat_id]
         if chat_id in LAST_SENT_DATA: del LAST_SENT_DATA[chat_id]
 
+# --- DASHBOARD HTML TEMPLATE ---
+DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GAG Bot Dashboard</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #121212; color: #e0e0e0; margin: 0; padding: 2rem; }
+        .container { max-width: 900px; margin: auto; }
+        h1, h2 { color: #bb86fc; border-bottom: 2px solid #333; padding-bottom: 10px; }
+        .stats { display: flex; gap: 2rem; margin-bottom: 2rem; }
+        .stat-card { background-color: #1e1e1e; padding: 1.5rem; border-radius: 8px; flex-grow: 1; text-align: center; border: 1px solid #333; }
+        .stat-card h3 { margin-top: 0; color: #03dac6; }
+        .stat-card .value { font-size: 2.5rem; font-weight: bold; }
+        .activity-log { background-color: #1e1e1e; border-radius: 8px; padding: 1rem; border: 1px solid #333; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 12px 15px; border-bottom: 1px solid #333; }
+        th { color: #bb86fc; }
+        .user-cell { display: flex; align-items: center; gap: 10px; }
+        .user-cell img { width: 40px; height: 40px; border-radius: 50%; }
+        .user-cell .name { font-weight: bold; }
+        .user-cell .username { color: #aaa; font-size: 0.9em; }
+        .logout { position: absolute; top: 20px; right: 20px; color: #cf6679; text-decoration: none; background-color: #333; padding: 8px 12px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/logout" class="logout">Logout</a>
+        <h1>GAG Bot Dashboard</h1>
+        <div class="stats">
+            <div class="stat-card">
+                <h3>Active Trackers</h3>
+                <div class="value">{{ stats.active_trackers }}</div>
+            </div>
+            <div class="stat-card">
+                <h3>Unique Users Today</h3>
+                <div class="value">{{ stats.unique_users }}</div>
+            </div>
+        </div>
+        <h2>Recent Activity</h2>
+        <div class="activity-log">
+            <table>
+                <thead>
+                    <tr><th>User</th><th>Command</th><th>Time</th></tr>
+                </thead>
+                <tbody>
+                    {% for log in activity %}
+                    <tr>
+                        <td>
+                            <div class="user-cell">
+                                <img src="{{ log.avatar_url }}" alt="Avatar">
+                                <div>
+                                    <div class="name">{{ log.first_name }}</div>
+                                    <div class="username">@{{ log.username }}</div>
+                                </div>
+                            </div>
+                        </td>
+                        <td><code>{{ log.command }}</code></td>
+                        <td>{{ log.time_ago }} ago</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+LOGIN_HTML = """
+<!DOCTYPE html><html><head><title>Login</title><style>body{display:flex;justify-content:center;align-items:center;height:100vh;background-color:#121212;color:white;font-family:sans-serif}form{background-color:#1e1e1e;padding:40px;border-radius:8px;border:1px solid #333;text-align:center}h2{color:#bb86fc}input{width:100%;padding:10px;margin:10px 0;border-radius:4px;border:1px solid #555;background:#333;color:white}button{width:100%;padding:10px;background-color:#bb86fc;color:black;border:none;border-radius:4px;cursor:pointer;font-weight:bold}.error{color:#cf6679;margin-top:10px;}</style></head><body><form method="post"><h2>Admin Login</h2><input type="text" name="username" placeholder="Username" required><input type="password" name="password" placeholder="Password" required><button type="submit">Login</button>{% if error %}<p class="error">{{ error }}</p>{% endif %}</form></body></html>
+"""
+
+# --- FLASK WEB ROUTES FOR DASHBOARD ---
+@app.route('/')
+def home():
+    return "Bot is alive. Admin dashboard is at /login."
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    error = None
+    if request.method == 'POST':
+        if request.form['username'] == ADMIN_USER and request.form['password'] == ADMIN_PASS:
+            session['logged_in'] = True
+            return redirect(url_for('dashboard'))
+        else:
+            error = 'Invalid Credentials. Please try again.'
+    return render_template_string(LOGIN_HTML, error=error)
+
+@app.route('/dashboard')
+async def dashboard():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    
+    # Process activity log for display
+    display_activity = []
+    bot = Bot(token=TOKEN)
+    for log in USER_ACTIVITY:
+        # Get user avatar URL
+        try:
+            profile_photos = await bot.get_user_profile_photos(log['user_id'], limit=1)
+            avatar_url = await profile_photos.photos[0][0].get_file() if profile_photos.photos else "https://i.imgur.com/jpfrJd3.png" # default avatar
+        except Exception:
+            avatar_url = "https://i.imgur.com/jpfrJd3.png"
+
+        # Calculate "time ago"
+        time_diff = datetime.now(pytz.utc) - log['timestamp']
+        if time_diff.total_seconds() < 60: time_ago = f"{int(time_diff.total_seconds())}s"
+        elif time_diff.total_seconds() < 3600: time_ago = f"{int(time_diff.total_seconds() / 60)}m"
+        else: time_ago = f"{int(time_diff.total_seconds() / 3600)}h"
+
+        display_activity.append({**log, "avatar_url": avatar_url, "time_ago": time_ago})
+    
+    stats = {
+        "active_trackers": len(ACTIVE_TRACKERS),
+        "unique_users": len(set(log['user_id'] for log in USER_ACTIVITY))
+    }
+    
+    return render_template_string(DASHBOARD_HTML, activity=display_activity, stats=stats)
+
+@app.route('/logout')
+def logout():
+    session.pop('logged_in', None)
+    return redirect(url_for('login'))
+
 # --- TELEGRAM COMMAND HANDLERS ---
 async def send_full_stock_report(update: Update, context: ContextTypes.DEFAULT_TYPE, filters: list[str]):
-    # ... (This function is unchanged, but called by the modified command handlers)
+    # ...
     loader_message = await update.message.reply_text("⏳ Fetching all stock categories...")
     data = await fetch_all_data()
-    if not data:
-        await loader_message.edit_text("⚠️ Could not fetch data."); return None
+    if not data: await loader_message.edit_text("⚠️ Could not fetch data."); return None
     restock_timers = get_all_restock_timers()
+    weather_info = f"🌤️ Weather: {data['weather'].get('icon', '')} {data['weather'].get('currentWeather', 'N/A')}"
     sent_anything = False
     for category_name, items in data["stock"].items():
         items_to_show = [item for item in items if not filters or any(f in item['name'].lower() for f in filters)]
         if items_to_show:
             sent_anything = True
-            category_message = format_category_message(category_name, items_to_show, restock_timers.get(category_name, "N/A"))
+            category_message = format_category_message(category_name, items_to_show, restock_timers.get(category_name, "N/A"), weather_info)
             await context.bot.send_message(update.effective_chat.id, text=category_message, parse_mode=ParseMode.HTML)
-    if not sent_anything and filters:
-         await context.bot.send_message(update.effective_chat.id, text="Your filter didn't match any items.")
+    if not sent_anything and filters: await context.bot.send_message(update.effective_chat.id, text="Your filter didn't match any items.")
     await loader_message.delete()
-    if sent_anything:
-        await send_music_vm(context, update.effective_chat.id)
+    if sent_anything: await send_music_vm(context, update.effective_chat.id)
     return data
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    log_user_activity(update.effective_user, "/start")
     chat_id = update.effective_chat.id
-    if chat_id in ACTIVE_TRACKERS:
-        await update.message.reply_text("📡 You are already tracking! Use /stop first, or /refresh."); return
-
+    if chat_id in ACTIVE_TRACKERS: await update.message.reply_text("📡 Already tracking! Use /stop or /refresh."); return
     filters = [f.strip().lower() for f in " ".join(context.args).split('|') if f.strip()]
     initial_data = await send_full_stock_report(update, context, filters)
-    
     if initial_data:
         LAST_SENT_DATA[chat_id] = initial_data
         task = asyncio.create_task(tracking_loop(chat_id, context.bot, context, filters))
-        # MODIFIED: Add 'is_muted' state on start
         ACTIVE_TRACKERS[chat_id] = {'task': task, 'filters': filters, 'is_muted': False}
-        await context.bot.send_message(chat_id, text=f"✅ <b>Tracking started!</b>\nNotifications are currently <b>ON</b>. Use /mute to silence them.\n(Filters: <code>{', '.join(filters) or 'None'}</code>)", parse_mode=ParseMode.HTML)
+        await context.bot.send_message(chat_id, text=f"✅ <b>Tracking started!</b>\nNotifications are <b>ON</b>. Use /mute to silence.\n(Filters: <code>{', '.join(filters) or 'None'}</code>)", parse_mode=ParseMode.HTML)
 
 async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    log_user_activity(update.effective_user, "/stop")
     chat_id = update.effective_chat.id
     if chat_id in ACTIVE_TRACKERS:
-        ACTIVE_TRACKERS[chat_id]['task'].cancel()
-        await update.message.reply_text("🛑 Gagstock tracking stopped.")
-    else:
-        await update.message.reply_text("⚠️ You don't have an active tracking session.")
+        ACTIVE_TRACKERS[chat_id]['task'].cancel(); await update.message.reply_text("🛑 Tracking stopped.")
+    else: await update.message.reply_text("⚠️ Not tracking anything.")
 
 async def refresh_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    log_user_activity(update.effective_user, "/refresh")
     filters = ACTIVE_TRACKERS.get(update.effective_chat.id, {}).get('filters', [])
     await send_full_stock_report(update, context, filters)
 
-# --- NEW: /mute and /unmute commands ---
 async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    tracker_info = ACTIVE_TRACKERS.get(chat_id)
-    if not tracker_info:
-        await update.message.reply_text("⚠️ You can't mute because you aren't tracking. Use /start first.")
-        return
-    if tracker_info.get('is_muted'):
-        await update.message.reply_text("Notifications are already muted.")
-    else:
-        tracker_info['is_muted'] = True
-        await update.message.reply_text("🔇 Notifications have been muted. The bot will continue tracking silently. Use /unmute to turn them back on.")
+    log_user_activity(update.effective_user, "/mute")
+    chat_id = update.effective_chat.id; tracker_info = ACTIVE_TRACKERS.get(chat_id)
+    if not tracker_info: await update.message.reply_text("⚠️ Not tracking. Use /start first."); return
+    if tracker_info.get('is_muted'): await update.message.reply_text("Notifications already muted.")
+    else: tracker_info['is_muted'] = True; await update.message.reply_text("🔇 Notifications muted. Use /unmute to resume.")
 
 async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    tracker_info = ACTIVE_TRACKERS.get(chat_id)
-    if not tracker_info:
-        await update.message.reply_text("⚠️ You aren't tracking anything. Use /start first.")
-        return
-    if not tracker_info.get('is_muted'):
-        await update.message.reply_text("Notifications are already on.")
-    else:
-        tracker_info['is_muted'] = False
-        await update.message.reply_text("🔊 Notifications have been turned back on! You will now receive alerts.")
+    log_user_activity(update.effective_user, "/unmute")
+    chat_id = update.effective_chat.id; tracker_info = ACTIVE_TRACKERS.get(chat_id)
+    if not tracker_info: await update.message.reply_text("⚠️ Not tracking. Use /start first."); return
+    if not tracker_info.get('is_muted'): await update.message.reply_text("Notifications already on.")
+    else: tracker_info['is_muted'] = False; await update.message.reply_text("🔊 Notifications resumed!")
+
+async def dashboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    log_user_activity(update.effective_user, "/dashboard")
+    # Get the base URL from Render's environment variable
+    base_url = os.environ.get('RENDER_EXTERNAL_URL', 'http://localhost:8080')
+    dashboard_url = f"{base_url}/login"
+    await update.message.reply_text(f"🔒 Your admin dashboard is ready.\n\nPlease log in here: {dashboard_url}", disable_web_page_preview=True)
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # MODIFIED: Updated help text
+    # ... (Help text updated below)
+    log_user_activity(update.effective_user, "/help")
     help_text = (
         "<b>Welcome to the GAG Prized Stock Alerter!</b>\n\n"
-        "I'll watch the stock for you and send special alerts.\n\n"
-        "▶️  <b>/start</b>\n"
-        "Shows current stock and starts tracking. You'll get alerts for prized items and general restocks.\n"
-        "› <i>Filter example:</i> <code>/start Carrot | Beanstalk</code>\n\n"
-        "🔄  <b>/refresh</b>\n"
-        "Manually shows the current stock for all categories.\n\n"
-        "🔇  <b>/mute</b>\n"
-        "Temporarily silence all notifications without stopping the tracker.\n\n"
-        "🔊  <b>/unmute</b>\n"
-        "Resume receiving notifications if you were muted.\n\n"
-        "⏹️  <b>/stop</b>\n"
-        "Stops the tracker and all notifications completely."
+        "▶️  <b>/start</b> - Starts tracking stock & sends alerts.\n"
+        "🔄  <b>/refresh</b> - Manually shows current stock.\n"
+        "🔇  <b>/mute</b> - Silence all notifications.\n"
+        "🔊  <b>/unmute</b> - Resume notifications.\n"
+        "⏹️  <b>/stop</b> - Stops the tracker completely.\n"
+        "🔒  <b>/dashboard</b> - Get the link to the admin dashboard."
     )
     await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
 def main():
-    if not TOKEN: logger.critical("TELEGRAM_TOKEN environment variable not found!"); return
-    keep_alive()
+    if not TOKEN: logger.critical("TELEGRAM_TOKEN not set!"); return
+    Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': int(os.environ.get('PORT', 8080))}).start()
     application = Application.builder().token(TOKEN).build()
-    
-    # MODIFIED: Add handlers for new commands
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(CommandHandler("stop", stop_cmd))
     application.add_handler(CommandHandler("refresh", refresh_cmd))
     application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("mute", mute_cmd))
     application.add_handler(CommandHandler("unmute", unmute_cmd))
-
-    logger.info("Bot is running with mute/unmute features...")
+    application.add_handler(CommandHandler("dashboard", dashboard_cmd))
+    logger.info("Bot and Dashboard are running...")
     application.run_polling()
 
 if __name__ == '__main__':
