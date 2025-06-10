@@ -6,7 +6,7 @@ WORKDIR /app
 
 # --- Install system dependencies, including ffmpeg ---
 # This runs as an administrator during the build, so it works!
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg
     # Clean up the apt cache to keep the final image small
     rm -rf /var/lib/apt/lists/*
 
