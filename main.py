@@ -260,10 +260,10 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if hasattr(update, 'callback_query') and update.callback_query:
         message_to_edit = update.callback_query.message
         try:
-            await message_to_edit.edit_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup)
+            await message_to_edit.edit_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup, parse_mode=ParseMode.HTML)
         except Exception as e:
             logger.warning(f"Could not edit message for admin panel, sending new one. Error: {e}")
-            await context.bot.send_message(chat_id=user.id, text=f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup)
+            await context.bot.send_message(chat_id=user.id, text=f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     else:
         await message_to_edit.reply_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup)
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -322,11 +322,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         message = "💎 <b>Current Prized Items:</b>\n\n" + ("\n".join([f"• <code>{item}</code>" for item in sorted(list(PRIZED_ITEMS))]) or "The list is empty.")
         await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data='admin_main')]]), parse_mode=ParseMode.HTML)
     elif action == "broadcast":
-        await query.edit_message_text("Please send the message you want to broadcast now. To cancel, send /cancel.")
-        # We would need a conversation handler here for a more robust implementation, but this is a simple approach
-        # A more advanced implementation is outside the scope of this refactor.
         await query.message.reply_text("Please use the command: <code>/broadcast [your message]</code>", parse_mode=ParseMode.HTML)
-
 async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user;
     if admin.id not in ADMIN_USERS: return
@@ -549,11 +545,8 @@ def main():
     
     application = Application.builder().token(TOKEN).build()
     
-    # User Commands
     application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd)); application.add_handler(CommandHandler("stats", stats_cmd))
-    # Admin Commands
     application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("deploy", deploy_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd))
-    # Handlers
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     application.add_handler(MessageHandler(filters.REPLY, reply_handler))
     
