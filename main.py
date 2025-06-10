@@ -287,7 +287,8 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 elif action_type == "unrestrict": RESTRICTED_USERS.discard(target_id); save_to_file("restricted_users.txt", RESTRICTED_USERS); text = f"✅ User {target_id} is no longer restricted."
                 elif action_type == "addadmin": ADMIN_USERS.add(target_id); save_to_file("admins.txt", ADMIN_USERS); text = f"👑 User {target_id} is now an admin."
                 elif action_type == "deladmin": ADMIN_USERS.discard(target_id); save_to_file("admins.txt", ADMIN_USERS); text = f"User {target_id} is no longer an admin."
-                await query.edit_message_text(text); await asyncio.sleep(2); await admin_cmd(query, context)
+                await query.edit_message_text(text); await asyncio.sleep(2)
+                await query.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to User List", callback_data='admin_users_0')]]))
         elif action == "stats":
             text = f"📊 <b>Bot Statistics</b>\n\n- <b>Authorized Users:</b> {len(AUTHORIZED_USERS)}\n- <b>Admins:</b> {len(ADMIN_USERS)}\n- <b>Active Trackers:</b> {len(ACTIVE_TRACKERS)}\n- <b>Banned Users:</b> {len(BANNED_USERS)}\n- <b>Restricted Users:</b> {len(RESTRICTED_USERS)}"
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data='admin_main')]]), parse_mode=ParseMode.HTML)
@@ -425,7 +426,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
-    # Handle replies to admin messages
     if update.message.reply_to_message and "A message from the Bot Admin" in update.message.reply_to_message.text:
         await log_user_activity(user, "[Reply to Admin]", context.bot)
         reply_text = f"🗣️ <b>New Reply from User:</b>\n\n<b>From:</b> {user.first_name} (<code>{user.id}</code>)\n<b>Message:</b> <i>{update.message.text}</i>\n\nTo reply, use <code>/msg {user.id} [your message]</code>"
@@ -433,7 +433,6 @@ async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await context.bot.send_message(chat_id=admin_id, text=reply_text, parse_mode=ParseMode.HTML)
             except Exception as e: logger.error(f"Failed to forward reply to admin {admin_id}: {e}")
         await update.message.reply_text("✅ Your reply has been sent to the admins.")
-    # Handle replies to update notifications
     elif update.message.reply_to_message and update.message.reply_to_message.caption and "A new version" in update.message.reply_to_message.caption and update.message.text.strip().lower() == '/update':
         await update_cmd(update, context)
 async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
