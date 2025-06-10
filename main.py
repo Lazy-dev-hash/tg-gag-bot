@@ -9,6 +9,8 @@ import json
 from datetime import datetime, timedelta
 import pytz
 import httpx
+from functools import partial
+
 from flask import Flask, render_template_string, request, session, redirect, url_for
 from threading import Thread
 
@@ -24,7 +26,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '9.0.1') # Definitive Edition
+BOT_VERSION = os.environ.get('BOT_VERSION', '10.0.0')
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
@@ -39,53 +41,47 @@ DATA_DIR = "/data"
 
 ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
 AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS = set(), set(), set(), set(), set()
-LAST_KNOWN_VERSION, USER_INFO_CACHE, VIP_USERS, VIP_CODES = "", {}, {}, {}
+LAST_KNOWN_VERSION, USER_INFO_CACHE, VIP_USERS, VIP_CODES, CUSTOM_COMMANDS = "", {}, {}, {}, {}
 
 # --- LOGGING SETUP ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- PERSISTENT STORAGE ---
-def load_set_from_file(filename):
+def load_json_from_file(filename, default_type=dict):
     filepath = os.path.join(DATA_DIR, filename)
+    if not os.path.exists(filepath): return default_type()
+    try:
+        with open(filepath, 'r') as f: return json.load(f)
+    except (json.JSONDecodeError, ValueError): logger.error(f"Could not decode {filename}."); return default_type()
+def save_json_to_file(filename, data):
+    filepath = os.path.join(DATA_DIR, filename)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(filepath, 'w') as f: json.dump(data, f, indent=4)
+def load_set_from_file(filename):
+    filepath = os.path.join(DATA_DIR, filename);
     if not os.path.exists(filepath): return set()
     with open(filepath, 'r') as f: return {line.strip() for line in f if line.strip()}
 def load_int_set_from_file(filename):
-    filepath = os.path.join(DATA_DIR, filename)
+    filepath = os.path.join(DATA_DIR, filename);
     if not os.path.exists(filepath): return set()
     with open(filepath, 'r') as f: return {int(line.strip()) for line in f if line.strip().isdigit()}
 def save_to_file(filename, data_set):
-    filepath = os.path.join(DATA_DIR, filename)
-    os.makedirs(DATA_DIR, exist_ok=True)
+    filepath = os.path.join(DATA_DIR, filename); os.makedirs(DATA_DIR, exist_ok=True)
     with open(filepath, 'w') as f:
         for item in data_set: f.write(f"{item}\n")
-def load_vips():
-    global VIP_USERS
-    filepath = os.path.join(DATA_DIR, "vips.json")
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, 'r') as f: VIP_USERS = {int(k): v for k, v in json.load(f).items()}
-        except (json.JSONDecodeError, ValueError):
-            logger.error("Could not decode vips.json. Starting with an empty VIP list.")
-            VIP_USERS = {}
-def save_vips():
-    filepath = os.path.join(DATA_DIR, "vips.json")
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(filepath, 'w') as f:
-        json.dump(VIP_USERS, f)
 def load_all_data():
-    global AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS, LAST_KNOWN_VERSION
-    AUTHORIZED_USERS = load_int_set_from_file("authorized_users.txt")
-    ADMIN_USERS = load_int_set_from_file("admins.txt")
-    BANNED_USERS = load_int_set_from_file("banned_users.txt")
-    RESTRICTED_USERS = load_int_set_from_file("restricted_users.txt")
+    global AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS, LAST_KNOWN_VERSION, VIP_USERS, CUSTOM_COMMANDS
+    AUTHORIZED_USERS = load_int_set_from_file("authorized_users.txt"); ADMIN_USERS = load_int_set_from_file("admins.txt")
+    BANNED_USERS = load_int_set_from_file("banned_users.txt"); RESTRICTED_USERS = load_int_set_from_file("restricted_users.txt")
     PRIZED_ITEMS = load_set_from_file("prized_items.txt") or {"master sprinkler", "beanstalk", "advanced sprinkler", "godly sprinkler", "ember lily"}
     if BOT_OWNER_ID: AUTHORIZED_USERS.add(BOT_OWNER_ID); ADMIN_USERS.add(BOT_OWNER_ID)
-    load_vips()
+    VIP_USERS = {int(k): v for k, v in load_json_from_file("vips.json").items()}
+    CUSTOM_COMMANDS = load_json_from_file("custom_commands.json")
     version_path = os.path.join(DATA_DIR, "version.txt")
     if os.path.exists(version_path):
         with open(version_path, 'r') as f: LAST_KNOWN_VERSION = f.read().strip()
-    logger.info(f"Loaded {len(AUTHORIZED_USERS)} users, {len(ADMIN_USERS)} admins, {len(BANNED_USERS)} banned, {len(RESTRICTED_USERS)} restricted. Loaded {len(PRIZED_ITEMS)} prized items. Loaded {len(VIP_USERS)} VIPs.")
+    logger.info(f"Loaded {len(AUTHORIZED_USERS)} users, {len(ADMIN_USERS)} admins, {len(BANNED_USERS)} banned, {len(RESTRICTED_USERS)} restricted. Loaded {len(PRIZED_ITEMS)} prized items. Loaded {len(VIP_USERS)} VIPs. Loaded {len(CUSTOM_COMMANDS)} custom commands.")
 
 async def log_user_activity(user: User, command: str, bot: Bot):
     if not user: return
@@ -258,7 +254,6 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_vip:
         chat_id = user.id
         if chat_id in ACTIVE_TRACKERS:
-            # ENHANCED: Smart update check
             tracker_version = ACTIVE_TRACKERS[chat_id].get('version', '0.0.0')
             if tracker_version != BOT_VERSION:
                 await update.message.reply_text("✨ <b>An update is available!</b> Let's get you on the latest version...")
@@ -266,7 +261,6 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("📡 ⭐ VIP tracking is already active and up-to-date!")
             return
-        
         filters = [f.strip().lower() for f in " ".join(context.args).split('|') if f.strip()]
         initial_data = await send_full_stock_report(update, context, filters)
         if initial_data:
@@ -275,6 +269,25 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id, text=f"✅ ⭐ <b>VIP Tracking Activated!</b>\nYou'll get automatic notifications for stock changes.", parse_mode=ParseMode.HTML)
     else:
         await update.message.reply_text("This command starts automatic background tracking for <b>VIP members</b>.\n\nAs a regular user, you can use /refresh to check stock at any time.\n\nTo become a VIP, you need to <code>/redeem</code> a code from an admin.", parse_mode=ParseMode.HTML)
+# --- This is the restored send_welcome_video function ---
+async def send_welcome_video(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    processing_msg = None
+    try:
+        processing_msg = await context.bot.send_message(chat_id=chat_id, text="🎁 Preparing your welcome video...")
+        ydl_opts = {'format': 'best[ext=mp4][height<=720]/best[ext=mp4]/best','outtmpl': f'{chat_id}_welcome_video.%(ext)s','quiet': True}
+        loop = asyncio.get_running_loop()
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = await loop.run_in_executor(None, lambda: ydl.extract_info(WELCOME_VIDEO_URL, download=True))
+            filename = ydl.prepare_filename(info).replace('.webm', '.mp4')
+        caption_text = "✨ <b>Welcome to the GAG Stock Alerter!</b> ✨\n\nThis video is a small token to welcome you to our community. I'm here to help you track all the latest items.\n\nType /help to see all available commands."
+        with open(filename, 'rb') as video_file:
+            await context.bot.send_video(chat_id=chat_id, video=video_file, caption=caption_text, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.error(f"Failed to send welcome video to {chat_id}: {e}")
+        await context.bot.send_message(chat_id=chat_id, text="Sorry, I couldn't prepare your welcome video at this time, but you have full access to the bot!")
+    finally:
+        if processing_msg: await processing_msg.delete()
+        if 'filename' in locals() and os.path.exists(filename): os.remove(filename)
 
 # --- ADMIN COMMANDS ---
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -487,7 +500,7 @@ async def redeem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await context.bot.send_message(chat_id=admin_id, text=f"⭐ <b>VIP Status Activated</b>\n\n<b>User:</b> {user.first_name} (<code>{user.id}</code>)\n<b>Expires:</b> {expiration_date.strftime('%B %d, %Y')}", parse_mode=ParseMode.HTML)
             except Exception as e: logger.error(f"Failed to send VIP notice to admin {admin_id}: {e}")
     else: await update.message.reply_text("❌ Invalid or already used VIP code.")
-
+    
 # --- USER COMMANDS & REPLY HANDLER ---
 async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user;
@@ -535,7 +548,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_vip: guide += "🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles VIP notifications.\n⏹️  <b>/stop</b> › Stops the VIP tracker completely.\n"
     guide += "✨  <b>/update</b> › Restarts your session to the latest bot version.\n\n"
     if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n📢  <b>/broadcast</b> <code>[msg]</code> › Send a message to all users.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n⭐  <b>/getvipcode</b> › Generates a new VIP code.\n⏳  <b>/extendvip</b> <code>[id] [days]</code> › Extends a user's VIP.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/restart</b> › Restarts the bot process.\n"
-    if user.id == BOT_OWNER_ID: guide += "\n<b><u>🔒 Owner Command</u></b>\n<code>/updatecode</code> › Reply to code to update bot."
+    if user.id == BOT_OWNER_ID: guide += "\n<b><u>🔒 Owner Command</u></b>\n<code>/deploy [version]</code> › Updates the bot from GitHub."
     await update.message.reply_text(guide, parse_mode=ParseMode.HTML)
 async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -549,8 +562,6 @@ async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ Your reply has been sent to the admins.")
     elif update.message.reply_to_message and update.message.reply_to_message.caption and "A new version" in update.message.reply_to_message.caption and update.message.text.strip().lower() == '/update':
         await update_cmd(update, context)
-    elif user.id == BOT_OWNER_ID and update.message.reply_to_message and update.message.reply_to_message.text and update.message.text.strip().lower() == '/updatecode':
-        await updatecode_cmd(update, context)
 async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
@@ -577,20 +588,6 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         vip_exp_date = datetime.fromisoformat(VIP_USERS[str(user.id)])
         stats_message += f"<b>Status:</b> ⭐ VIP (Expires: {vip_exp_date.strftime('%B %d, %Y')})"
     await update.message.reply_html(stats_message)
-async def updatecode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    owner = update.effective_user
-    if owner.id != BOT_OWNER_ID: return
-    if not update.message.reply_to_message or not update.message.reply_to_message.text:
-        await update.message.reply_text("⚠️ Please reply to the message containing the new Python code with this command."); return
-    await log_user_activity(owner, "/updatecode", context.bot)
-    new_code = update.message.reply_to_message.text
-    if "import logging" not in new_code or "def main():" not in new_code:
-        await update.message.reply_text("❌ Validation failed. The provided text doesn't look like a valid bot script."); return
-    await update.message.reply_text("✅ Code received and validated.\n💾 Overwriting `main.py` now...")
-    with open(__file__, "w", encoding="utf-8") as f:
-        f.write(new_code)
-    await update.message.reply_text("🚀 Restarting the bot to apply the update. This may take a moment...")
-    os.execv(sys.executable, ['python'] + sys.argv)
 async def check_for_updates(application: Application):
     global LAST_KNOWN_VERSION
     if BOT_VERSION != LAST_KNOWN_VERSION:
@@ -603,24 +600,6 @@ async def check_for_updates(application: Application):
         version_filepath = os.path.join(DATA_DIR, "version.txt")
         with open(version_filepath, "w") as f: f.write(BOT_VERSION)
         LAST_KNOWN_VERSION = BOT_VERSION
-async def send_welcome_video(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    processing_msg = None
-    try:
-        processing_msg = await context.bot.send_message(chat_id=chat_id, text="🎁 Preparing your welcome video...")
-        ydl_opts = {'format': 'best[ext=mp4][height<=720]/best[ext=mp4]/best','outtmpl': f'{chat_id}_welcome_video.%(ext)s','quiet': True}
-        loop = asyncio.get_running_loop()
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = await loop.run_in_executor(None, lambda: ydl.extract_info(WELCOME_VIDEO_URL, download=True))
-            filename = ydl.prepare_filename(info).replace('.webm', '.mp4')
-        caption_text = "✨ <b>Welcome to the GAG Stock Alerter!</b> ✨\n\nThis video is a small token to welcome you to our community. I'm here to help you track all the latest items.\n\nType /help to see all available commands."
-        with open(filename, 'rb') as video_file:
-            await context.bot.send_video(chat_id=chat_id, video=video_file, caption=caption_text, parse_mode=ParseMode.HTML)
-    except Exception as e:
-        logger.error(f"Failed to send welcome video to {chat_id}: {e}")
-        await context.bot.send_message(chat_id=chat_id, text="Sorry, I couldn't prepare your welcome video at this time, but you have full access to the bot!")
-    finally:
-        if processing_msg: await processing_msg.delete()
-        if 'filename' in locals() and os.path.exists(filename): os.remove(filename)
 
 def main():
     if not TOKEN or not BOT_OWNER_ID: logger.critical("Required environment variables are not set!"); return
@@ -632,7 +611,7 @@ def main():
     # User Commands
     application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd)); application.add_handler(CommandHandler("stats", stats_cmd)); application.add_handler(CommandHandler("redeem", redeem_cmd))
     # Admin Commands
-    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("restart", restart_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd)); application.add_handler(CommandHandler("getvipcode", getvipcode_cmd)); application.add_handler(CommandHandler("extendvip", extendvip_cmd)); application.add_handler(CommandHandler("updatecode", updatecode_cmd))
+    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("restart", restart_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd)); application.add_handler(CommandHandler("getvipcode", getvipcode_cmd)); application.add_handler(CommandHandler("extendvip", extendvip_cmd))
     # Handlers
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     application.add_handler(MessageHandler(filters.REPLY, reply_handler))
