@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: gag-bot-prestige # You can change this name if you want
+    env: docker
+    repo: https://github.com/Lazy-dev-hash/tg-gag-bot # This should be your repo URL
+    branch: main
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.5 # Specifies the Python version
+      - fromGroup: gag-bot-secrets # Tells Render to use an Environment Group
+    disks:
+      - name: bot-data
+        mountPath: /data
+        sizeGB: 1
+    dockerfilePath: ./Dockerfile
+    dockerCommand: python main.py
