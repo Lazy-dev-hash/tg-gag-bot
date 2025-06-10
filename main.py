@@ -22,7 +22,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '3.0.0')
+BOT_VERSION = os.environ.get('BOT_VERSION', '3.0.1')
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
@@ -48,11 +48,9 @@ def load_set_from_file(filename):
 def load_int_set_from_file(filename):
     if not os.path.exists(filename): return set()
     with open(filename, 'r') as f: return {int(line.strip()) for line in f if line.strip().isdigit()}
-
 def save_to_file(filename, data_set):
     with open(filename, 'w') as f:
         for item in data_set: f.write(f"{item}\n")
-
 def load_all_data():
     global AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS, LAST_KNOWN_VERSION
     AUTHORIZED_USERS = load_int_set_from_file("authorized_users.txt")
@@ -71,20 +69,16 @@ async def log_user_activity(user: User, command: str, bot: Bot):
     avatar_url = "https://i.imgur.com/jpfrJd3.png"
     try:
         if user:
-            # Cache user info to reduce API calls, refresh every hour
             if user.id not in USER_INFO_CACHE or (datetime.now(pytz.utc) - USER_INFO_CACHE[user.id]['timestamp']).total_seconds() > 3600:
                 p_photos = await bot.get_user_profile_photos(user.id, limit=1)
                 avatar_path = (await p_photos.photos[0][0].get_file()).file_path if p_photos and p_photos.photos and p_photos.photos[0] else None
                 USER_INFO_CACHE[user.id] = {'first_name': user.first_name,'username': user.username or "N/A",'avatar_path': avatar_path, 'timestamp': datetime.now(pytz.utc)}
-            
             user_info = USER_INFO_CACHE[user.id]
             if user_info.get('avatar_path'): avatar_url = f"https://api.telegram.org/file/bot{TOKEN}/{user_info['avatar_path']}"
-            
             activity_log = {"user_id": user.id, "first_name": user_info['first_name'], "username": user_info['username'], "command": command, "timestamp": datetime.now(pytz.utc), "avatar_url": avatar_url}
             USER_ACTIVITY.insert(0, activity_log); del USER_ACTIVITY[50:]
             logger.info(f"Logged activity for {user.first_name}: {command}")
     except Exception as e: logger.warning(f"Could not log activity for {user.id}. Error: {e}")
-
 
 # --- HELPER & CORE BOT FUNCTIONS ---
 PHT = pytz.timezone('Asia/Manila')
@@ -151,9 +145,7 @@ async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TY
             old_prized = {item['name'].lower() for cat in old_data['stock'].values() for item in cat}
             new_prized = {item['name'].lower() for cat in new_data['stock'].values() for item in cat}
             just_appeared = new_prized - old_prized
-            
             prized_items_in_stock = just_appeared.intersection(PRIZED_ITEMS)
-
             if prized_items_in_stock and not is_muted:
                 item_details = [item for cat in new_data['stock'].values() for item in cat if item['name'].lower() in prized_items_in_stock]
                 alert_list = "\n".join([f"› {add_emoji(i['name'])}: {format_value(i['value'])}" for i in item_details])
@@ -259,7 +251,7 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🌐 Open Dashboard", url=dashboard_url)],
         [InlineKeyboardButton("👤 User Management", callback_data='admin_users_0')],
-        [InlineKeyboardButton("💎 Prized Items", callback_data='admin_prized_0')],
+        [InlineKeyboardButton("💎 Prized Items", callback_data='admin_prized')],
         [InlineKeyboardButton("📊 Bot Stats", callback_data='admin_stats')],
         [InlineKeyboardButton("❌ Close", callback_data='admin_close')]
     ]
@@ -275,7 +267,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         action = data[1]
         if action == "users":
             page = int(data[2]); users_per_page = 5
-            user_list = sorted(list(AUTHORIZED_USERS)); start_index, end_index = page * users_per_page, start_index + users_per_page
+            user_list = sorted(list(AUTHORIZED_USERS)); start_index, end_index = page * users_per_page, page * users_per_page + users_per_page
             keyboard = []
             for uid in user_list[start_index:end_index]:
                 user_info = USER_INFO_CACHE.get(uid, {'first_name': f'User {uid}', 'username': 'N/A'})
@@ -310,7 +302,20 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 elif action_type == "unrestrict": RESTRICTED_USERS.discard(target_id); save_to_file("restricted_users.txt", RESTRICTED_USERS); text = f"✅ User {target_id} is no longer restricted."
                 elif action_type == "addadmin": ADMIN_USERS.add(target_id); save_to_file("admins.txt", ADMIN_USERS); text = f"👑 User {target_id} is now an admin."
                 elif action_type == "deladmin": ADMIN_USERS.discard(target_id); save_to_file("admins.txt", ADMIN_USERS); text = f"User {target_id} is no longer an admin."
-                await query.edit_message_text(text); await asyncio.sleep(2); await admin_cmd(query, context)
+                await query.edit_message_text(text); await asyncio.sleep(2)
+                # After action, go back to the specific user management page
+                user_info = USER_INFO_CACHE.get(target_id, {'first_name': f'User {target_id}', 'username': 'N/A'})
+                status = "Active"; status_icon = "✅"
+                if target_id in BANNED_USERS: status = "Banned"; status_icon = "🚫"
+                elif target_id in RESTRICTED_USERS: status = "Restricted"; status_icon = "⚠️"
+                elif target_id in ADMIN_USERS: status = "Admin"; status_icon = "👑"
+                keyboard = [
+                    [InlineKeyboardButton("✅ Unban" if target_id in BANNED_USERS else "🚫 Ban", callback_data=f"admin_user_unban_{target_id}" if target_id in BANNED_USERS else f"admin_user_ban_{target_id}")],
+                    [InlineKeyboardButton("✅ Unrestrict" if target_id in RESTRICTED_USERS else "⚠️ Restrict", callback_data=f"admin_user_unrestrict_{target_id}" if target_id in RESTRICTED_USERS else f"admin_user_restrict_{target_id}")],
+                    [InlineKeyboardButton("Demote" if target_id in ADMIN_USERS else "👑 Promote", callback_data=f"admin_user_deladmin_{target_id}" if target_id in ADMIN_USERS else f"admin_user_addadmin_{target_id}")],
+                    [InlineKeyboardButton("⬅️ Back to User List", callback_data='admin_users_0')]
+                ]
+                await query.edit_message_text(f"<b>Managing:</b> {user_info['first_name']}\n<b>ID:</b> <code>{target_id}</code>\n<b>Status:</b> {status_icon} {status}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
         elif action == "stats":
             text = f"📊 <b>Bot Statistics</b>\n\n- <b>Authorized Users:</b> {len(AUTHORIZED_USERS)}\n- <b>Admins:</b> {len(ADMIN_USERS)}\n- <b>Active Trackers:</b> {len(ACTIVE_TRACKERS)}\n- <b>Banned Users:</b> {len(BANNED_USERS)}\n- <b>Restricted Users:</b> {len(RESTRICTED_USERS)}"
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data='admin_main')]]), parse_mode=ParseMode.HTML)
@@ -318,9 +323,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
              message = "💎 <b>Current Prized Items:</b>\n\n" + ("\n".join([f"• <code>{item}</code>" for item in sorted(list(PRIZED_ITEMS))]) or "The list is empty.")
              await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data='admin_main')]]), parse_mode=ParseMode.HTML)
         elif action == "main": await admin_cmd(query, context)
-        elif action == "close": await query.edit_message_text("Panel closed.")
-        elif action == "dashboard": # This case is now handled by the URL button
-            await query.edit_message_text("Opening dashboard link...")
+        elif action == "close": await query.delete_message()
 async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
     if admin.id not in ADMIN_USERS: return
@@ -333,6 +336,18 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=target_id, text="🎉 <b>You have been approved!</b>\n\nYou can now use /start to begin tracking.")
     except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/approve [user_id]</code>", parse_mode=ParseMode.HTML)
     except Exception as e: await update.message.reply_text(f"❌ Error approving user: {e}")
+async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): # RESTORED
+    admin = update.effective_user
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, f"/addadmin", context.bot)
+    try:
+        target_id = int(context.args[0])
+        if target_id in ADMIN_USERS: await update.message.reply_text("This user is already an admin."); return
+        ADMIN_USERS.add(target_id); save_to_file("admins.txt", ADMIN_USERS)
+        if target_id not in AUTHORIZED_USERS: AUTHORIZED_USERS.add(target_id); save_to_file("authorized_users.txt", AUTHORIZED_USERS)
+        await update.message.reply_text(f"👑 User <code>{target_id}</code> is now an admin!", parse_mode=ParseMode.HTML)
+        await context.bot.send_message(chat_id=target_id, text="🛡️ <b>You have been promoted to an Admin!</b>")
+    except (IndexError, ValueError): await update.message.reply_text("Usage: <code>/addadmin [user_id]</code>", parse_mode=ParseMode.HTML)
 async def msg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
     if admin.id not in ADMIN_USERS: return
@@ -373,7 +388,7 @@ async def delprized_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🗑️ '<code>{item_name}</code>' has been removed from the prized list.", parse_mode=ParseMode.HTML)
 async def listprized_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if user.id not in AUTHORIZED_USERS: return
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
     await log_user_activity(user, "/listprized", context.bot)
     if not PRIZED_ITEMS: message = "The prized item list is currently empty."
     else: message = "💎 <b>Current Prized Items:</b>\n\n" + "\n".join([f"• <code>{item}</code>" for item in sorted(list(PRIZED_ITEMS))])
@@ -391,7 +406,7 @@ async def deploy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except httpx.HTTPStatusError as e: await update.message.reply_text(f"❌ Failed to trigger deploy. Status {e.response.status_code}:\n<pre>{e.response.text}</pre>", parse_mode=ParseMode.HTML)
     except Exception as e: await update.message.reply_text(f"❌ An unexpected error occurred: {e}")
 
-# --- USER COMMANDS ---
+# --- USER COMMANDS & REPLY HANDLER ---
 async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user;
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
@@ -435,6 +450,16 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     guide = "📘 <b>GAG Stock Alerter Guide</b>\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › Starts the tracker.\n🔄  <b>/refresh</b> › Manually shows current stock.\n📈  <b>/recent</b> › Shows recent items.\n💎  <b>/listprized</b> › Shows the prized items list.\n🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles notifications.\n⏹️  <b>/stop</b> › Stops the tracker completely.\n\n"
     if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/deploy</b> › Restarts & updates the bot."
     await update.message.reply_text(guide, parse_mode=ParseMode.HTML)
+async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    if update.message.reply_to_message and "A message from the Bot Admin" in update.message.reply_to_message.text:
+        await log_user_activity(user, "[Reply to Admin]", context.bot)
+        reply_text = f"🗣️ <b>New Reply from User:</b>\n\n<b>From:</b> {user.first_name} (<code>{user.id}</code>)\n<b>Message:</b> <i>{update.message.text}</i>\n\nTo reply, use <code>/msg {user.id} [your message]</code>"
+        for admin_id in ADMIN_USERS:
+            try: await context.bot.send_message(chat_id=admin_id, text=reply_text, parse_mode=ParseMode.HTML)
+            except Exception as e: logger.error(f"Failed to forward reply to admin {admin_id}: {e}")
+        await update.message.reply_text("✅ Your reply has been sent to the admins.")
 
 async def check_for_updates(application: Application):
     global LAST_KNOWN_VERSION
@@ -454,7 +479,6 @@ def main():
     load_all_data()
     Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': int(os.environ.get('PORT', 8080))}, daemon=True).start()
     
-    global application
     application = Application.builder().token(TOKEN).build()
     
     application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd))
