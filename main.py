@@ -16,51 +16,18 @@ from telegram import Update, Bot, User, InlineKeyboardButton, InlineKeyboardMark
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 
-# --- LOGGING SETUP FIRST ---
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# --- NEW: Robust Environment Variable Check ---
-def check_env_vars():
-    """Checks for required environment variables and logs the status."""
-    required_vars = ['TOKEN', 'BOT_OWNER_ID']
-    all_vars = [
-        'TOKEN', 'BOT_OWNER_ID', 'BOT_VERSION', 'ADMIN_PANEL_TITLE',
-        'RENDER_API_KEY', 'RENDER_SERVICE_ID', 'ADMIN_USER', 'ADMIN_PASS', 'FLASK_SECRET_KEY'
-    ]
-    
-    found_vars_log = {}
-    for var in all_vars:
-        found_vars_log[var] = '✅ SET' if os.environ.get(var) else '❌ NOT SET'
-    
-    logger.info(f"Environment Variable Check:\n{json.dumps(found_vars_log, indent=2)}")
-
-    missing_vars = [var for var in required_vars if not os.environ.get(var)]
-    
-    if missing_vars:
-        logger.critical(f"FATAL ERROR: The following required environment variables are not set: {', '.join(missing_vars)}")
-        return False
-    return True
-
-# Check variables immediately at startup
-if not check_env_vars():
-    sys.exit("Exiting due to missing critical environment variables.")
-
 # --- FLASK, CONFIG, & STATE MANAGEMENT ---
 app = Flask(__name__)
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'default-secret-key-for-local-dev')
+ADMIN_USER = os.environ.get('ADMIN_USER', 'admin')
+ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
-# Load variables now that we know they exist
 TOKEN = os.environ.get('TOKEN')
-BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID'))
-BOT_VERSION = os.environ.get('BOT_VERSION', '8.0.1')
+BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
+BOT_VERSION = os.environ.get('BOT_VERSION', '8.0.1') # Bugfix Release
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
-ADMIN_USER = os.environ.get('ADMIN_USER', 'admin')
-ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
-FLASK_SECRET_KEY = os.environ.get('FLASK_SECRET_KEY', 'a-very-secret-key-that-should-be-changed')
-
-app.secret_key = FLASK_SECRET_KEY
 
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
 API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
@@ -73,6 +40,9 @@ ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
 AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS = set(), set(), set(), set(), set()
 LAST_KNOWN_VERSION, USER_INFO_CACHE, VIP_USERS, VIP_CODES = "", {}, {}, {}
 
+# --- LOGGING SETUP ---
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- PERSISTENT STORAGE ---
 def load_set_from_file(filename):
@@ -94,27 +64,22 @@ def load_vips():
     if os.path.exists(filepath):
         try:
             with open(filepath, 'r') as f: VIP_USERS = {int(k): v for k, v in json.load(f).items()}
-        except (json.JSONDecodeError, ValueError):
-            logger.error("Could not decode vips.json. Starting with an empty VIP list.")
-            VIP_USERS = {}
+        except (json.JSONDecodeError, ValueError): logger.error("Could not decode vips.json."); VIP_USERS = {}
 def save_vips():
     filepath = os.path.join(DATA_DIR, "vips.json")
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(filepath, 'w') as f:
-        json.dump(VIP_USERS, f)
+    with open(filepath, 'w') as f: json.dump(VIP_USERS, f)
 def load_all_data():
     global AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS, LAST_KNOWN_VERSION
-    AUTHORIZED_USERS = load_int_set_from_file("authorized_users.txt")
-    ADMIN_USERS = load_int_set_from_file("admins.txt")
-    BANNED_USERS = load_int_set_from_file("banned_users.txt")
-    RESTRICTED_USERS = load_int_set_from_file("restricted_users.txt")
+    AUTHORIZED_USERS = load_int_set_from_file("authorized_users.txt"); ADMIN_USERS = load_int_set_from_file("admins.txt")
+    BANNED_USERS = load_int_set_from_file("banned_users.txt"); RESTRICTED_USERS = load_int_set_from_file("restricted_users.txt")
     PRIZED_ITEMS = load_set_from_file("prized_items.txt") or {"master sprinkler", "beanstalk", "advanced sprinkler", "godly sprinkler", "ember lily"}
     if BOT_OWNER_ID: AUTHORIZED_USERS.add(BOT_OWNER_ID); ADMIN_USERS.add(BOT_OWNER_ID)
     load_vips()
     version_path = os.path.join(DATA_DIR, "version.txt")
     if os.path.exists(version_path):
         with open(version_path, 'r') as f: LAST_KNOWN_VERSION = f.read().strip()
-    logger.info(f"Loaded {len(AUTHORIZED_USERS)} users, {len(ADMIN_USERS)} admins, {len(BANNED_USERS)} banned, {len(RESTRICTED_USERS)} restricted. Loaded {len(PRIZED_ITEMS)} prized items. Loaded {len(VIP_USERS)} VIPs.")
+    logger.info(f"Loaded {len(AUTHORIZED_USERS)} users, {len(ADMIN_USERS)} admins. Previous version: {LAST_KNOWN_VERSION or 'N/A'}")
 
 async def log_user_activity(user: User, command: str, bot: Bot):
     if not user: return
@@ -489,21 +454,6 @@ async def extendvip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ VIP status for user <code>{target_id}</code> extended by {days} days. New expiration: {new_expiration.strftime('%B %d, %Y')}", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=target_id, text=f"🎉 Your VIP status has been extended! It now expires on {new_expiration.strftime('%B %d, %Y')}.")
     except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/extendvip [user_id] [days]</code>", parse_mode=ParseMode.HTML)
-async def redeem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
-    await log_user_activity(user, "/redeem", context.bot)
-    if len(context.args) != 1: await update.message.reply_text("Usage: <code>/redeem [vip_code]</code>", parse_mode=ParseMode.HTML); return
-    code = context.args[0]
-    if code in VIP_CODES:
-        del VIP_CODES[code]
-        expiration_date = datetime.now() + timedelta(days=30); VIP_USERS[user.id] = expiration_date.isoformat(); save_vips()
-        await update.message.reply_text(f"🎉 <b>Congratulations!</b>\n\nYou have successfully redeemed a VIP code. Your VIP status is active until {expiration_date.strftime('%B %d, %Y')}.")
-        await log_user_activity(user, "[VIP Activated]", context.bot)
-        for admin_id in ADMIN_USERS:
-            try: await context.bot.send_message(chat_id=admin_id, text=f"⭐ <b>VIP Status Activated</b>\n\n<b>User:</b> {user.first_name} (<code>{user.id}</code>)\n<b>Expires:</b> {expiration_date.strftime('%B %d, %Y')}", parse_mode=ParseMode.HTML)
-            except Exception as e: logger.error(f"Failed to send VIP notice to admin {admin_id}: {e}")
-    else: await update.message.reply_text("❌ Invalid or already used VIP code.")
 
 # --- USER COMMANDS & REPLY HANDLER ---
 async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -551,12 +501,13 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_vip: guide += "⭐  <b>/redeem</b> <code>[code]</code> › Redeem a VIP code.\n"
     if is_vip: guide += "🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles VIP notifications.\n⏹️  <b>/stop</b> › Stops the VIP tracker completely.\n"
     guide += "✨  <b>/update</b> › Restarts your session to the latest bot version.\n\n"
-    if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n📢  <b>/broadcast</b> <code>[msg]</code> › Send a message to all users.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n⭐  <b>/getvipcode</b> › Generates a new VIP code.\n⏳  <b>/extendvip</b> <code>[id] [days]</code> › Extends a user's VIP.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n"
-    if user.id == BOT_OWNER_ID: guide += "\n<b><u>🔒 Owner Command</u></b>\n🚀  <b>/deploy</b> <code>[version]</code> › Updates the bot from GitHub."
+    if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n📢  <b>/broadcast</b> <code>[msg]</code> › Send a message to all users.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n⭐  <b>/getvipcode</b> › Generates a new VIP code.\n⏳  <b>/extendvip</b> <code>[id] [days]</code> › Extends a user's VIP.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/restart</b> › Restarts the bot process.\n"
+    if user.id == BOT_OWNER_ID: guide += "\n<b><u>🔒 Owner Command</u></b>\n<code>/updatecode</code> › Reply to code to update bot."
     await update.message.reply_text(guide, parse_mode=ParseMode.HTML)
 async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    # Handle user replies to admin messages
     if update.message.reply_to_message and update.message.reply_to_message.text and "A message from the Bot Admin" in update.message.reply_to_message.text:
         await log_user_activity(user, "[Reply to Admin]", context.bot)
         reply_text = f"🗣️ <b>New Reply from User:</b>\n\n<b>From:</b> {user.first_name} (<code>{user.id}</code>)\n<b>Message:</b> <i>{update.message.text}</i>\n\nTo reply, use <code>/msg {user.id} [your message]</code>"
@@ -564,8 +515,12 @@ async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await context.bot.send_message(chat_id=admin_id, text=reply_text, parse_mode=ParseMode.HTML)
             except Exception as e: logger.error(f"Failed to forward reply to admin {admin_id}: {e}")
         await update.message.reply_text("✅ Your reply has been sent to the admins.")
+    # Handle user replies to update notifications
     elif update.message.reply_to_message and update.message.reply_to_message.caption and "A new version" in update.message.reply_to_message.caption and update.message.text.strip().lower() == '/update':
         await update_cmd(update, context)
+    # Handle owner replies for code updates
+    elif user.id == BOT_OWNER_ID and update.message.reply_to_message and update.message.reply_to_message.text and update.message.text.strip().lower() == '/updatecode':
+        await updatecode_cmd(update, context)
 async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
@@ -620,7 +575,7 @@ def main():
     # User Commands
     application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd)); application.add_handler(CommandHandler("stats", stats_cmd)); application.add_handler(CommandHandler("redeem", redeem_cmd))
     # Admin Commands
-    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("deploy", deploy_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd)); application.add_handler(CommandHandler("restart", restart_cmd)); application.add_handler(CommandHandler("getvipcode", getvipcode_cmd)); application.add_handler(CommandHandler("extendvip", extendvip_cmd))
+    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("restart", restart_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd)); application.add_handler(CommandHandler("getvipcode", getvipcode_cmd)); application.add_handler(CommandHandler("extendvip", extendvip_cmd))
     # Handlers
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     application.add_handler(MessageHandler(filters.REPLY, reply_handler))
