@@ -4,6 +4,8 @@ import os
 import yt_dlp
 import random
 import string
+import requests
+import google.generativeai as genai
 from datetime import datetime, timedelta
 import pytz
 import httpx
@@ -22,10 +24,12 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '3.0.1')
+BOT_VERSION = os.environ.get('BOT_VERSION', '4.0.0')
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
+CLIPDROP_API_KEY = os.environ.get('CLIPDROP_API_KEY')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
 API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
@@ -37,9 +41,10 @@ ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
 AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS = set(), set(), set(), set(), set()
 LAST_KNOWN_VERSION, USER_INFO_CACHE = "", {}
 
-# --- LOGGING SETUP ---
+# --- LOGGING & API SETUP ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
+if GEMINI_API_KEY: genai.configure(api_key=GEMINI_API_KEY)
 
 # --- PERSISTENT STORAGE ---
 def load_set_from_file(filename):
@@ -57,7 +62,7 @@ def load_all_data():
     ADMIN_USERS = load_int_set_from_file("admins.txt")
     BANNED_USERS = load_int_set_from_file("banned_users.txt")
     RESTRICTED_USERS = load_int_set_from_file("restricted_users.txt")
-    PRIZED_ITEMS = load_set_from_file("prized_items.txt")
+    PRIZED_ITEMS = load_set_from_file("prized_items.txt") or {"master sprinkler", "beanstalk", "advanced sprinkler", "godly sprinkler", "ember lily"}
     if BOT_OWNER_ID: AUTHORIZED_USERS.add(BOT_OWNER_ID); ADMIN_USERS.add(BOT_OWNER_ID)
     if os.path.exists("version.txt"):
         with open("version.txt", 'r') as f: LAST_KNOWN_VERSION = f.read().strip()
@@ -258,8 +263,7 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup)
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    query = update.callback_query; await query.answer()
     admin_id = query.from_user.id
     if admin_id not in ADMIN_USERS: await query.edit_message_text("❌ You are not authorized for this action."); return
     data = query.data.split('_'); command = data[0]
@@ -302,20 +306,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 elif action_type == "unrestrict": RESTRICTED_USERS.discard(target_id); save_to_file("restricted_users.txt", RESTRICTED_USERS); text = f"✅ User {target_id} is no longer restricted."
                 elif action_type == "addadmin": ADMIN_USERS.add(target_id); save_to_file("admins.txt", ADMIN_USERS); text = f"👑 User {target_id} is now an admin."
                 elif action_type == "deladmin": ADMIN_USERS.discard(target_id); save_to_file("admins.txt", ADMIN_USERS); text = f"User {target_id} is no longer an admin."
-                await query.edit_message_text(text); await asyncio.sleep(2)
-                # After action, go back to the specific user management page
-                user_info = USER_INFO_CACHE.get(target_id, {'first_name': f'User {target_id}', 'username': 'N/A'})
-                status = "Active"; status_icon = "✅"
-                if target_id in BANNED_USERS: status = "Banned"; status_icon = "🚫"
-                elif target_id in RESTRICTED_USERS: status = "Restricted"; status_icon = "⚠️"
-                elif target_id in ADMIN_USERS: status = "Admin"; status_icon = "👑"
-                keyboard = [
-                    [InlineKeyboardButton("✅ Unban" if target_id in BANNED_USERS else "🚫 Ban", callback_data=f"admin_user_unban_{target_id}" if target_id in BANNED_USERS else f"admin_user_ban_{target_id}")],
-                    [InlineKeyboardButton("✅ Unrestrict" if target_id in RESTRICTED_USERS else "⚠️ Restrict", callback_data=f"admin_user_unrestrict_{target_id}" if target_id in RESTRICTED_USERS else f"admin_user_restrict_{target_id}")],
-                    [InlineKeyboardButton("Demote" if target_id in ADMIN_USERS else "👑 Promote", callback_data=f"admin_user_deladmin_{target_id}" if target_id in ADMIN_USERS else f"admin_user_addadmin_{target_id}")],
-                    [InlineKeyboardButton("⬅️ Back to User List", callback_data='admin_users_0')]
-                ]
-                await query.edit_message_text(f"<b>Managing:</b> {user_info['first_name']}\n<b>ID:</b> <code>{target_id}</code>\n<b>Status:</b> {status_icon} {status}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+                await query.edit_message_text(text); await asyncio.sleep(2); await admin_cmd(query, context)
         elif action == "stats":
             text = f"📊 <b>Bot Statistics</b>\n\n- <b>Authorized Users:</b> {len(AUTHORIZED_USERS)}\n- <b>Admins:</b> {len(ADMIN_USERS)}\n- <b>Active Trackers:</b> {len(ACTIVE_TRACKERS)}\n- <b>Banned Users:</b> {len(BANNED_USERS)}\n- <b>Restricted Users:</b> {len(RESTRICTED_USERS)}"
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data='admin_main')]]), parse_mode=ParseMode.HTML)
@@ -336,7 +327,7 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=target_id, text="🎉 <b>You have been approved!</b>\n\nYou can now use /start to begin tracking.")
     except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/approve [user_id]</code>", parse_mode=ParseMode.HTML)
     except Exception as e: await update.message.reply_text(f"❌ Error approving user: {e}")
-async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): # RESTORED
+async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
     if admin.id not in ADMIN_USERS: return
     await log_user_activity(admin, f"/addadmin", context.bot)
@@ -447,7 +438,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id in BANNED_USERS: return
     if user.id not in AUTHORIZED_USERS: await update.message.reply_text("You need to be approved to use this bot. Send /start to begin the approval process."); return
     await log_user_activity(user, "/help", context.bot)
-    guide = "📘 <b>GAG Stock Alerter Guide</b>\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › Starts the tracker.\n🔄  <b>/refresh</b> › Manually shows current stock.\n📈  <b>/recent</b> › Shows recent items.\n💎  <b>/listprized</b> › Shows the prized items list.\n🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles notifications.\n⏹️  <b>/stop</b> › Stops the tracker completely.\n\n"
+    guide = "📘 <b>GAG Stock Alerter Guide</b>\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › Starts the tracker.\n🔄  <b>/refresh</b> › Manually shows current stock.\n📈  <b>/recent</b> › Shows recent items.\n💎  <b>/listprized</b> › Shows the prized items list.\n🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles notifications.\n⏹️  <b>/stop</b> › Stops the tracker completely.\n\n<b><u>✨ AI & Image Tools</u></b>\n🤖  <b>/ai</b> <code>[prompt]</code> › Ask the AI a question.\n🖼️  <b>/enhance</b> › Reply to an image to enhance it.\n✂️  <b>/removebg</b> › Reply to an image to remove the background.\n\n"
     if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/deploy</b> › Restarts & updates the bot."
     await update.message.reply_text(guide, parse_mode=ParseMode.HTML)
 async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -482,12 +473,13 @@ def main():
     application = Application.builder().token(TOKEN).build()
     
     application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd))
+    application.add_handler(CommandHandler("ai", ai_cmd)); application.add_handler(CommandHandler("enhance", enhance_cmd)); application.add_handler(CommandHandler("removebg", removebg_cmd))
     application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("deploy", deploy_cmd))
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     application.add_handler(MessageHandler(filters.REPLY, reply_handler))
     
     application.job_queue.run_once(check_for_updates, 5)
-    logger.info("Bot [God Tier Admin Edition] is running...")
+    logger.info("Bot [AI Assistant Edition] is running...")
     application.run_polling()
 
 if __name__ == '__main__':
