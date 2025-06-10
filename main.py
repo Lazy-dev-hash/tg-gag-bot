@@ -24,7 +24,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '4.0.0')
+BOT_VERSION = os.environ.get('BOT_VERSION', '4.0.1')
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
@@ -68,7 +68,6 @@ def load_all_data():
         with open("version.txt", 'r') as f: LAST_KNOWN_VERSION = f.read().strip()
     logger.info(f"Loaded {len(AUTHORIZED_USERS)} users, {len(ADMIN_USERS)} admins, {len(BANNED_USERS)} banned, {len(RESTRICTED_USERS)} restricted. Loaded {len(PRIZED_ITEMS)} prized items.")
 
-# --- DECOUPLED ACTIVITY LOGGER ---
 async def log_user_activity(user: User, command: str, bot: Bot):
     if not user: return
     avatar_url = "https://i.imgur.com/jpfrJd3.png"
@@ -82,7 +81,6 @@ async def log_user_activity(user: User, command: str, bot: Bot):
             if user_info.get('avatar_path'): avatar_url = f"https://api.telegram.org/file/bot{TOKEN}/{user_info['avatar_path']}"
             activity_log = {"user_id": user.id, "first_name": user_info['first_name'], "username": user_info['username'], "command": command, "timestamp": datetime.now(pytz.utc), "avatar_url": avatar_url}
             USER_ACTIVITY.insert(0, activity_log); del USER_ACTIVITY[50:]
-            logger.info(f"Logged activity for {user.first_name}: {command}")
     except Exception as e: logger.warning(f"Could not log activity for {user.id}. Error: {e}")
 
 # --- HELPER & CORE BOT FUNCTIONS ---
@@ -224,8 +222,7 @@ async def send_full_stock_report(update: Update, context: ContextTypes.DEFAULT_T
     if sent_anything: await send_music_vm(context, update.effective_chat.id)
     return data
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    await log_user_activity(user, "/start", context.bot)
+    user = update.effective_user; await log_user_activity(user, "/start", context.bot)
     if user.id in BANNED_USERS: await update.message.reply_text("❌ You have been banned from using this bot."); return
     if user.id not in AUTHORIZED_USERS:
         code = "GAG-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=3)) + '-' + ''.join(random.choices(string.ascii_uppercase + string.digits, k=3))
@@ -253,13 +250,7 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await log_user_activity(user, "/admin", context.bot)
     base_url = os.environ.get('RENDER_EXTERNAL_URL', f'http://localhost:{os.environ.get("PORT", 8080)}')
     dashboard_url = f"{base_url}/login"
-    keyboard = [
-        [InlineKeyboardButton("🌐 Open Dashboard", url=dashboard_url)],
-        [InlineKeyboardButton("👤 User Management", callback_data='admin_users_0')],
-        [InlineKeyboardButton("💎 Prized Items", callback_data='admin_prized')],
-        [InlineKeyboardButton("📊 Bot Stats", callback_data='admin_stats')],
-        [InlineKeyboardButton("❌ Close", callback_data='admin_close')]
-    ]
+    keyboard = [[InlineKeyboardButton("🌐 Open Dashboard", url=dashboard_url)],[InlineKeyboardButton("👤 User Management", callback_data='admin_users_0')],[InlineKeyboardButton("💎 Prized Items", callback_data='admin_prized')],[InlineKeyboardButton("📊 Bot Stats", callback_data='admin_stats')],[InlineKeyboardButton("❌ Close", callback_data='admin_close')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup)
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -287,16 +278,11 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             action_type = data[2]; target_id = int(data[3])
             if action_type == "manage":
                 user_info = USER_INFO_CACHE.get(target_id, {'first_name': f'User {target_id}', 'username': 'N/A'})
-                status = "Active"; status_icon = "✅"
-                if target_id in BANNED_USERS: status = "Banned"; status_icon = "🚫"
-                elif target_id in RESTRICTED_USERS: status = "Restricted"; status_icon = "⚠️"
-                elif target_id in ADMIN_USERS: status = "Admin"; status_icon = "👑"
-                keyboard = [
-                    [InlineKeyboardButton("✅ Unban" if target_id in BANNED_USERS else "🚫 Ban", callback_data=f"admin_user_unban_{target_id}" if target_id in BANNED_USERS else f"admin_user_ban_{target_id}")],
-                    [InlineKeyboardButton("✅ Unrestrict" if target_id in RESTRICTED_USERS else "⚠️ Restrict", callback_data=f"admin_user_unrestrict_{target_id}" if target_id in RESTRICTED_USERS else f"admin_user_restrict_{target_id}")],
-                    [InlineKeyboardButton("Demote" if target_id in ADMIN_USERS else "👑 Promote", callback_data=f"admin_user_deladmin_{target_id}" if target_id in ADMIN_USERS else f"admin_user_addadmin_{target_id}")],
-                    [InlineKeyboardButton("⬅️ Back to User List", callback_data='admin_users_0')]
-                ]
+                status, status_icon = "Active", "✅"
+                if target_id in BANNED_USERS: status, status_icon = "Banned", "🚫"
+                elif target_id in RESTRICTED_USERS: status, status_icon = "Restricted", "⚠️"
+                elif target_id in ADMIN_USERS: status, status_icon = "Admin", "👑"
+                keyboard = [[InlineKeyboardButton("✅ Unban" if target_id in BANNED_USERS else "🚫 Ban", callback_data=f"admin_user_unban_{target_id}" if target_id in BANNED_USERS else f"admin_user_ban_{target_id}")],[InlineKeyboardButton("✅ Unrestrict" if target_id in RESTRICTED_USERS else "⚠️ Restrict", callback_data=f"admin_user_unrestrict_{target_id}" if target_id in RESTRICTED_USERS else f"admin_user_restrict_{target_id}")],[InlineKeyboardButton("Demote" if target_id in ADMIN_USERS else "👑 Promote", callback_data=f"admin_user_deladmin_{target_id}" if target_id in ADMIN_USERS else f"admin_user_addadmin_{target_id}")],[InlineKeyboardButton("⬅️ Back to User List", callback_data='admin_users_0')]]
                 await query.edit_message_text(f"<b>Managing:</b> {user_info['first_name']}\n<b>ID:</b> <code>{target_id}</code>\n<b>Status:</b> {status_icon} {status}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
             else:
                 if target_id == BOT_OWNER_ID: await query.edit_message_text("❌ This action cannot be performed on the bot owner."); return
@@ -316,7 +302,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         elif action == "main": await admin_cmd(query, context)
         elif action == "close": await query.delete_message()
 async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    admin = update.effective_user
+    admin = update.effective_user;
     if admin.id not in ADMIN_USERS: return
     await log_user_activity(admin, f"/approve", context.bot)
     try:
@@ -328,7 +314,7 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/approve [user_id]</code>", parse_mode=ParseMode.HTML)
     except Exception as e: await update.message.reply_text(f"❌ Error approving user: {e}")
 async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    admin = update.effective_user
+    admin = update.effective_user;
     if admin.id not in ADMIN_USERS: return
     await log_user_activity(admin, f"/addadmin", context.bot)
     try:
@@ -340,7 +326,7 @@ async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=target_id, text="🛡️ <b>You have been promoted to an Admin!</b>")
     except (IndexError, ValueError): await update.message.reply_text("Usage: <code>/addadmin [user_id]</code>", parse_mode=ParseMode.HTML)
 async def msg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    admin = update.effective_user
+    admin = update.effective_user;
     if admin.id not in ADMIN_USERS: return
     await log_user_activity(admin, f"/msg", context.bot)
     try:
@@ -353,7 +339,7 @@ async def msg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (IndexError, ValueError): await update.message.reply_text("⚠️ Invalid format. Usage: <code>/msg [user_id] [your message]</code>", parse_mode=ParseMode.HTML)
     except Exception as e: await update.message.reply_text(f"❌ Could not send message. Error: {e}")
 async def adminlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    admin = update.effective_user
+    admin = update.effective_user;
     if admin.id not in ADMIN_USERS: return
     await log_user_activity(admin, "/adminlist", context.bot)
     admin_list_text = "<b>🛡️ Current Bot Admins</b>\n\n"
@@ -396,6 +382,50 @@ async def deploy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ Deploy signal accepted! A new build has been triggered.")
     except httpx.HTTPStatusError as e: await update.message.reply_text(f"❌ Failed to trigger deploy. Status {e.response.status_code}:\n<pre>{e.response.text}</pre>", parse_mode=ParseMode.HTML)
     except Exception as e: await update.message.reply_text(f"❌ An unexpected error occurred: {e}")
+
+# --- AI & IMAGE COMMANDS ---
+async def ai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    await log_user_activity(user, "/ai", context.bot)
+    if not GEMINI_API_KEY: await update.message.reply_text("The AI feature is not configured."); return
+    prompt = " ".join(context.args)
+    if not prompt: await update.message.reply_text("<b>Example:</b> <code>/ai What is the capital of the Philippines?</code>", parse_mode=ParseMode.HTML); return
+    thinking_msg = await update.message.reply_text("🧠 Generating response...")
+    try:
+        model = genai.GenerativeModel('gemini-pro'); response = await model.generate_content_async(prompt)
+        await thinking_msg.edit_text(response.text)
+    except Exception as e: logger.error(f"Gemini AI error: {e}"); await thinking_msg.edit_text("Sorry, I couldn't process your request.")
+async def enhance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    await log_user_activity(user, "/enhance", context.bot)
+    if not update.message.reply_to_message or not update.message.reply_to_message.photo: await update.message.reply_text("Please reply to a photo with <code>/enhance</code>.", parse_mode=ParseMode.HTML); return
+    if not CLIPDROP_API_KEY: await update.message.reply_text("The image enhancement feature is not configured."); return
+    processing_msg = await update.message.reply_text("✨ Enhancing your image...")
+    try:
+        file = await context.bot.get_file(update.message.reply_to_message.photo[-1].file_id)
+        async with httpx.AsyncClient() as client: photo_data = await client.get(file.file_path)
+        r = requests.post('https://clipdrop-api.co/image-upscaling/v1/upscale', files={'image_file': ('image.jpg', photo_data.content, 'image/jpeg')}, headers={'x-api-key': CLIPDROP_API_KEY}, data={'target_width': 2048, 'target_height': 2048})
+        if r.ok: await context.bot.send_photo(chat_id=user.id, photo=r.content, caption="Here is your enhanced image!")
+        else: r.raise_for_status()
+        await processing_msg.delete()
+    except Exception as e: logger.error(f"Enhance command error: {e}"); await processing_msg.edit_text("Sorry, something went wrong.")
+async def removebg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    await log_user_activity(user, "/removebg", context.bot)
+    if not update.message.reply_to_message or not update.message.reply_to_message.photo: await update.message.reply_text("Please reply to a photo with <code>/removebg</code>.", parse_mode=ParseMode.HTML); return
+    if not CLIPDROP_API_KEY: await update.message.reply_text("The background removal feature is not configured."); return
+    processing_msg = await update.message.reply_text("🎨 Removing background...")
+    try:
+        file = await context.bot.get_file(update.message.reply_to_message.photo[-1].file_id)
+        async with httpx.AsyncClient() as client: photo_data = await client.get(file.file_path)
+        r = requests.post('https://clipdrop-api.co/remove-background/v1', files={'image_file': ('image.jpg', photo_data.content, 'image/jpeg')}, headers={'x-api-key': CLIPDROP_API_KEY})
+        if r.ok: await context.bot.send_document(chat_id=user.id, document=r.content, filename="removed_bg.png", caption="Background removed!")
+        else: r.raise_for_status()
+        await processing_msg.delete()
+    except Exception as e: logger.error(f"RemoveBG command error: {e}"); await processing_msg.edit_text("Sorry, something went wrong.")
 
 # --- USER COMMANDS & REPLY HANDLER ---
 async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
