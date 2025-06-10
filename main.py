@@ -26,7 +26,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '12.0.1') # Final Showcase Edition
+BOT_VERSION = os.environ.get('BOT_VERSION', '12.0.1') # Final Bugfix
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
@@ -41,7 +41,7 @@ DATA_DIR = "/data"
 
 ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
 AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS = set(), set(), set(), set(), set()
-LAST_KNOWN_VERSION, USER_INFO_CACHE, VIP_USERS, CUSTOM_COMMANDS, PENDING_APPROVALS, PENDING_VIP_ACTIVATIONS = "", {}, {}, {}, {}, {}
+LAST_KNOWN_VERSION, USER_INFO_CACHE, VIP_USERS, VIP_CODES, CUSTOM_COMMANDS, PENDING_APPROVALS = "", {}, {}, {}, {}, {}
 
 # --- LOGGING SETUP ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -465,17 +465,13 @@ async def grantvip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if target_id not in AUTHORIZED_USERS: await update.message.reply_text("❌ User must be authorized first."); return
         if target_id in VIP_USERS and datetime.fromisoformat(VIP_USERS[target_id]) > datetime.now():
             await update.message.reply_text("This user is already a VIP. Use /extendvip to add more time."); return
-        
         agent_adjectives = ["Cosmic", "Starlight", "Quantum", "Nebula", "Solar", "Lunar", "Crimson", "Shadow"]
         agent_nouns = ["Phoenix", "Drifter", "Spectre", "Voyager", "Nomad", "Warden", "Rogue", "Paladin"]
         agent_name = f"Agent {random.choice(agent_adjectives)} {random.choice(agent_nouns)}"
         activation_code = "VIP-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
-        
         PENDING_VIP_ACTIVATIONS[activation_code] = {'user_id': target_id, 'agent_name': agent_name}
-        
         admin_message = f"🌟 <b>VIP Grant Initiated</b>\n\n<b>For User:</b> {USER_INFO_CACHE.get(target_id, {}).get('first_name', target_id)}\n<b>Agent Name:</b> {agent_name}\n<b>Activation Code:</b> <code>{activation_code}</code>\n\nTell the user to redeem this code with /redeem."
         user_message = f"✨ An admin has granted you VIP access! Your assigned agent callsign is <b>{agent_name}</b>.\n\nPlease use the following command with the code they provide to activate your status:\n<code>/redeem [activation_code]</code>"
-        
         await update.message.reply_html(admin_message)
         await context.bot.send_message(chat_id=target_id, text=user_message, parse_mode=ParseMode.HTML)
     except (IndexError, ValueError):
@@ -507,7 +503,6 @@ async def redeem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         activation_data = PENDING_VIP_ACTIVATIONS.pop(code)
         agent_name = activation_data['agent_name']
         expiration_date = datetime.now() + timedelta(days=30); VIP_USERS[user.id] = expiration_date.isoformat(); save_vips()
-        
         await update.message.reply_text(f"🎉 <b>Congratulations, {agent_name}!</b>\n\nYou have successfully activated your VIP status. It is active until {expiration_date.strftime('%B %d, %Y')}.\n\nUse /start to begin VIP tracking!")
         await log_user_activity(user, "[VIP Activated]", context.bot)
         for admin_id in ADMIN_USERS:
@@ -543,6 +538,40 @@ async def vip_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     elif action == "decline":
         await query.edit_message_text(f"❌ VIP request for {user_info['first_name']} (<code>{target_id}</code>) has been declined.", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=target_id, text="Your request for VIP status has been declined by an admin.")
+async def addcommand_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, "/addcommand", context.bot)
+    try:
+        if len(context.args) < 3: raise ValueError
+        name = context.args[0].lower()
+        permission = context.args[1].lower()
+        response = " ".join(context.args[2:])
+        if not name.isalnum(): await update.message.reply_text("❌ Command name can only contain letters and numbers."); return
+        if permission not in ["user", "admin", "both"]: await update.message.reply_text("❌ Permission must be 'user', 'admin', or 'both'."); return
+        CUSTOM_COMMANDS[name] = {"response": response, "permission": permission}; save_json_to_file("custom_commands.json", CUSTOM_COMMANDS)
+        await update.message.reply_text(f"✅ Custom command `/{name}` created!\n\nUse /restart for the new command to become active.", parse_mode=ParseMode.HTML)
+    except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/addcommand [name] [permission] [response]</code>\n\n- <b>Permission</b> can be: user, admin, or both.", parse_mode=ParseMode.HTML)
+async def delcommand_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, "/delcommand", context.bot)
+    try:
+        name = context.args[0].lower()
+        if name in CUSTOM_COMMANDS:
+            del CUSTOM_COMMANDS[name]; save_json_to_file("custom_commands.json", CUSTOM_COMMANDS)
+            await update.message.reply_text(f"🗑️ Custom command `/{name}` deleted.\n\nUse /restart for this change to take effect.", parse_mode=ParseMode.HTML)
+        else: await update.message.reply_text(f"❌ Command `/{name}` not found.")
+    except IndexError: await update.message.reply_text("⚠️ Usage: <code>/delcommand [name]</code>", parse_mode=ParseMode.HTML)
+async def listcommands_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id not in ADMIN_USERS: return
+    await log_user_activity(user, "/listcommands", context.bot)
+    if not CUSTOM_COMMANDS: await update.message.reply_text("There are no custom commands currently set."); return
+    message = "<b>🔧 Custom Commands List</b>\n\n"
+    for name, data in CUSTOM_COMMANDS.items():
+        message += f"• <code>/{name}</code> (Permission: {data['permission']})\n"
+    await update.message.reply_html(message)
 
 # --- USER COMMANDS & REPLY HANDLER ---
 async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -590,7 +619,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_vip: guide += "⭐  <b>/requestvip</b> › Request VIP status from an admin.\n"
     if is_vip: guide += "🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles VIP notifications.\n⏹️  <b>/stop</b> › Stops the VIP tracker completely.\n"
     guide += "✨  <b>/update</b> › Restarts your session to the latest bot version.\n\n"
-    if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n📢  <b>/broadcast</b> <code>[msg]</code> › Send a message to all users.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[code]</code> › Authorizes a new user by code.\n⭐  <b>/grantvip</b> <code>[id]</code> › Initiates the VIP activation process.\n⏳  <b>/extendvip</b> <code>[id] [days]</code> › Extends a user's VIP.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/restart</b> › Restarts the bot process.\n\n<b><u>🔧 Custom Commands</u></b>\n<code>/addcommand [name] [perm] [resp]</code>\n<code>/delcommand [name]</code>\n<code>/listcommands</code>"
+    if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n📢  <b>/broadcast</b> <code>[msg]</code> › Send a message to all users.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[code]</code> › Authorizes a new user by code.\n⭐  <b>/grantvip</b> <code>[id]</code> › Initiates the VIP activation process.\n⏳  <b>/extendvip</b> <code>[id] [days]</code> › Extends a user's VIP.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/restart</b> › Restarts the bot process.\n\n<b><u>🔧 Custom Commands</u></b>\n<code>/addcommand [name] [perm] [resp]</code>\n<code>/delcommand [name]</code>\n<code>/listcommands</code>\n"
+    if user.id == BOT_OWNER_ID: guide += "\n<b><u>🔒 Owner Command</u></b>\n<code>/updatecode</code> › Reply to code to update bot."
     await update.message.reply_text(guide, parse_mode=ParseMode.HTML)
 async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -604,6 +634,8 @@ async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ Your reply has been sent to the admins.")
     elif update.message.reply_to_message and update.message.reply_to_message.caption and "A new version" in update.message.reply_to_message.caption and update.message.text.strip().lower() == '/update':
         await update_cmd(update, context)
+    elif user.id == BOT_OWNER_ID and update.message.reply_to_message and update.message.reply_to_message.text and update.message.text.strip().lower() == '/updatecode':
+        await updatecode_cmd(update, context)
 async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
@@ -676,8 +708,7 @@ def main():
     # User Commands
     application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd)); application.add_handler(CommandHandler("stats", stats_cmd)); application.add_handler(CommandHandler("requestvip", requestvip_cmd))
     # Admin Commands
-    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("restart", restart_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd)); application.add_handler(CommandHandler("extendvip", extendvip_cmd)); application.add_handler(CommandHandler("grantvip", grantvip_cmd))
-    application.add_handler(CommandHandler("addcommand", addcommand_cmd)); application.add_handler(CommandHandler("delcommand", delcommand_cmd)); application.add_handler(CommandHandler("listcommands", listcommands_cmd))
+    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("restart", restart_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd)); application.add_handler(CommandHandler("extendvip", extendvip_cmd)); application.add_handler(CommandHandler("grantvip", grantvip_cmd)); application.add_handler(CommandHandler("addcommand", addcommand_cmd)); application.add_handler(CommandHandler("delcommand", delcommand_cmd)); application.add_handler(CommandHandler("listcommands", listcommands_cmd))
     # Handlers
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     application.add_handler(CallbackQueryHandler(vip_callback_handler, pattern='^vip_'))
