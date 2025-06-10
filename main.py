@@ -26,8 +26,10 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '11.0.0') # Definitive Edition
+BOT_VERSION = os.environ.get('BOT_VERSION', '10.0.1') # Bugfix Release
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
+RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
+RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
 
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
 API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
@@ -39,7 +41,7 @@ DATA_DIR = "/data"
 
 ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
 AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS = set(), set(), set(), set(), set()
-LAST_KNOWN_VERSION, USER_INFO_CACHE, VIP_USERS, CUSTOM_COMMANDS = "", {}, {}, {}
+LAST_KNOWN_VERSION, USER_INFO_CACHE, VIP_USERS, VIP_CODES, CUSTOM_COMMANDS = "", {}, {}, {}, {}
 
 # --- LOGGING SETUP ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -53,8 +55,7 @@ def load_json_from_file(filename, default_type=dict):
         with open(filepath, 'r') as f: return json.load(f)
     except (json.JSONDecodeError, ValueError): logger.error(f"Could not decode {filename}."); return default_type()
 def save_json_to_file(filename, data):
-    filepath = os.path.join(DATA_DIR, filename)
-    os.makedirs(DATA_DIR, exist_ok=True)
+    filepath = os.path.join(DATA_DIR, filename); os.makedirs(DATA_DIR, exist_ok=True)
     with open(filepath, 'w') as f: json.dump(data, f, indent=4)
 def load_set_from_file(filename):
     filepath = os.path.join(DATA_DIR, filename);
@@ -79,7 +80,7 @@ def load_all_data():
     version_path = os.path.join(DATA_DIR, "version.txt")
     if os.path.exists(version_path):
         with open(version_path, 'r') as f: LAST_KNOWN_VERSION = f.read().strip()
-    logger.info(f"Loaded {len(AUTHORIZED_USERS)} users, {len(ADMIN_USERS)} admins, {len(PRIZED_ITEMS)} prized items, {len(VIP_USERS)} VIPs, {len(CUSTOM_COMMANDS)} custom commands.")
+    logger.info(f"Loaded {len(AUTHORIZED_USERS)} users, {len(ADMIN_USERS)} admins. Loaded {len(PRIZED_ITEMS)} prized items. Loaded {len(VIP_USERS)} VIPs. Loaded {len(CUSTOM_COMMANDS)} custom commands.")
 
 async def log_user_activity(user: User, command: str, bot: Bot):
     if not user: return
@@ -259,6 +260,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("📡 ⭐ VIP tracking is already active and up-to-date!")
             return
+        
         filters = [f.strip().lower() for f in " ".join(context.args).split('|') if f.strip()]
         initial_data = await send_full_stock_report(update, context, filters)
         if initial_data:
@@ -267,24 +269,6 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id, text=f"✅ ⭐ <b>VIP Tracking Activated!</b>\nYou'll get automatic notifications for stock changes.", parse_mode=ParseMode.HTML)
     else:
         await update.message.reply_text("This command starts automatic background tracking for <b>VIP members</b>.\n\nAs a regular user, you can use /refresh to check stock at any time.\n\nTo become a VIP, you need to <code>/redeem</code> a code from an admin.", parse_mode=ParseMode.HTML)
-async def send_welcome_video(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    processing_msg = None
-    try:
-        processing_msg = await context.bot.send_message(chat_id=chat_id, text="🎁 Preparing your welcome video...")
-        ydl_opts = {'format': 'best[ext=mp4][height<=720]/best[ext=mp4]/best','outtmpl': f'{chat_id}_welcome_video.%(ext)s','quiet': True}
-        loop = asyncio.get_running_loop()
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = await loop.run_in_executor(None, lambda: ydl.extract_info(WELCOME_VIDEO_URL, download=True))
-            filename = ydl.prepare_filename(info).replace('.webm', '.mp4')
-        caption_text = "✨ <b>Welcome to the GAG Stock Alerter!</b> ✨\n\nThis video is a small token to welcome you to our community. I'm here to help you track all the latest items.\n\nType /help to see all available commands."
-        with open(filename, 'rb') as video_file:
-            await context.bot.send_video(chat_id=chat_id, video=video_file, caption=caption_text, parse_mode=ParseMode.HTML)
-    except Exception as e:
-        logger.error(f"Failed to send welcome video to {chat_id}: {e}")
-        await context.bot.send_message(chat_id=chat_id, text="Sorry, I couldn't prepare your welcome video at this time, but you have full access to the bot!")
-    finally:
-        if processing_msg: await processing_msg.delete()
-        if 'filename' in locals() and os.path.exists(filename): os.remove(filename)
 
 # --- ADMIN COMMANDS ---
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -497,6 +481,24 @@ async def redeem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await context.bot.send_message(chat_id=admin_id, text=f"⭐ <b>VIP Status Activated</b>\n\n<b>User:</b> {user.first_name} (<code>{user.id}</code>)\n<b>Expires:</b> {expiration_date.strftime('%B %d, %Y')}", parse_mode=ParseMode.HTML)
             except Exception as e: logger.error(f"Failed to send VIP notice to admin {admin_id}: {e}")
     else: await update.message.reply_text("❌ Invalid or already used VIP code.")
+async def send_welcome_video(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    processing_msg = None
+    try:
+        processing_msg = await context.bot.send_message(chat_id=chat_id, text="🎁 Preparing your welcome video...")
+        ydl_opts = {'format': 'best[ext=mp4][height<=720]/best[ext=mp4]/best','outtmpl': f'{chat_id}_welcome_video.%(ext)s','quiet': True}
+        loop = asyncio.get_running_loop()
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = await loop.run_in_executor(None, lambda: ydl.extract_info(WELCOME_VIDEO_URL, download=True))
+            filename = ydl.prepare_filename(info).replace('.webm', '.mp4')
+        caption_text = "✨ <b>Welcome to the GAG Stock Alerter!</b> ✨\n\nThis video is a small token to welcome you to our community. I'm here to help you track all the latest items.\n\nType /help to see all available commands."
+        with open(filename, 'rb') as video_file:
+            await context.bot.send_video(chat_id=chat_id, video=video_file, caption=caption_text, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.error(f"Failed to send welcome video to {chat_id}: {e}")
+        await context.bot.send_message(chat_id=chat_id, text="Sorry, I couldn't prepare your welcome video, but you have full access to the bot!")
+    finally:
+        if processing_msg: await processing_msg.delete()
+        if 'filename' in locals() and os.path.exists(filename): os.remove(filename)
 
 # --- USER COMMANDS & REPLY HANDLER ---
 async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -621,21 +623,16 @@ def main():
     
     application = Application.builder().token(TOKEN).build()
     
-    # Dynamic Command Handler
-    for name, data in CUSTOM_COMMANDS.items():
-        handler = CommandHandler(name, partial(custom_command_handler, command_name=name, response_text=data["response"], permission=data["permission"]))
-        application.add_handler(handler)
-
     # User Commands
     application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd)); application.add_handler(CommandHandler("stats", stats_cmd)); application.add_handler(CommandHandler("redeem", redeem_cmd))
     # Admin Commands
-    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("restart", restart_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd)); application.add_handler(CommandHandler("getvipcode", getvipcode_cmd)); application.add_handler(CommandHandler("extendvip", extendvip_cmd)); application.add_handler(CommandHandler("updatecode", updatecode_cmd)); application.add_handler(CommandHandler("addcommand", addcommand_cmd)); application.add_handler(CommandHandler("delcommand", delcommand_cmd)); application.add_handler(CommandHandler("listcommands", listcommands_cmd))
+    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("restart", restart_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd)); application.add_handler(CommandHandler("getvipcode", getvipcode_cmd)); application.add_handler(CommandHandler("extendvip", extendvip_cmd)); application.add_handler(CommandHandler("updatecode", updatecode_cmd))
     # Handlers
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     application.add_handler(MessageHandler(filters.REPLY, reply_handler))
     
     application.job_queue.run_once(check_for_updates, 5)
-    logger.info("Bot [Dynamic Edition] is running...")
+    logger.info("Bot [VIP Prestige Edition] is running...")
     application.run_polling()
 
 if __name__ == '__main__':
