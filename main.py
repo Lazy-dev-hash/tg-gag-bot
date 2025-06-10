@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import os
+import sys
 import yt_dlp
 import random
 import string
@@ -22,10 +23,8 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '5.0.0')
+BOT_VERSION = os.environ.get('BOT_VERSION', '6.0.0') # The Final Update
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
-RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
-RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
 
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
 API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
@@ -366,19 +365,25 @@ async def listprized_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not PRIZED_ITEMS: message = "The prized item list is currently empty."
     else: message = "💎 <b>Current Prized Items:</b>\n\n" + "\n".join([f"• <code>{item}</code>" for item in sorted(list(PRIZED_ITEMS))])
     await update.message.reply_html(message)
-async def deploy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    admin = update.effective_user
-    if admin.id not in ADMIN_USERS: return
-    await log_user_activity(admin, f"/deploy", context.bot)
-    if not RENDER_API_KEY or not RENDER_SERVICE_ID: await update.message.reply_text("❌ Deploy command is not configured."); return
-    deploy_url, headers, payload = f"https://api.render.com/v1/services/{RENDER_SERVICE_ID}/deploys", {"Authorization": f"Bearer {RENDER_API_KEY}", "Content-Type": "application/json"}, {"clearCache": "do_not_clear"}
-    try:
-        await update.message.reply_text("🚀 Sending deploy signal to Render...")
-        async with httpx.AsyncClient() as client: response = await client.post(deploy_url, headers=headers, json=payload); response.raise_for_status()
-        await update.message.reply_text("✅ Deploy signal accepted! A new build has been triggered.")
-    except httpx.HTTPStatusError as e: await update.message.reply_text(f"❌ Failed to trigger deploy. Status {e.response.status_code}:\n<pre>{e.response.text}</pre>", parse_mode=ParseMode.HTML)
-    except Exception as e: await update.message.reply_text(f"❌ An unexpected error occurred: {e}")
-
+async def updatecode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    owner = update.effective_user
+    if owner.id != BOT_OWNER_ID: return
+    if not update.message.reply_to_message or not update.message.reply_to_message.text:
+        await update.message.reply_text("⚠️ Please reply to the message containing the new Python code with this command."); return
+    
+    await log_user_activity(owner, "/updatecode", context.bot)
+    
+    new_code = update.message.reply_to_message.text
+    if "import logging" not in new_code or "def main():" not in new_code:
+        await update.message.reply_text("❌ Validation failed. The provided text doesn't look like a valid bot script."); return
+        
+    await update.message.reply_text("✅ Code received and validated.\n💾 Overwriting `main.py` now...")
+    with open("main.py", "w", encoding="utf-8") as f:
+        f.write(new_code)
+    
+    await update.message.reply_text("🚀 Restarting the bot to apply the update. This may take a moment...")
+    os.execv(sys.executable, ['python'] + sys.argv)
+    
 # --- USER COMMANDS & REPLY HANDLER ---
 async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user;
@@ -421,7 +426,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id not in AUTHORIZED_USERS: await update.message.reply_text("You need to be approved to use this bot. Send /start to begin the approval process."); return
     await log_user_activity(user, "/help", context.bot)
     guide = "📘 <b>GAG Stock Alerter Guide</b>\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › Starts the tracker.\n🔄  <b>/refresh</b> › Manually shows current stock.\n📈  <b>/recent</b> › Shows recent items.\n💎  <b>/listprized</b> › Shows the prized items list.\n🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles notifications.\n⏹️  <b>/stop</b> › Stops the tracker completely.\n✨  <b>/update</b> › Restarts your tracker to the latest bot version.\n\n"
-    if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/deploy</b> › Restarts & updates the bot from GitHub."
+    if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n"
+    if user.id == BOT_OWNER_ID: guide += "\n<b><u>🔒 Owner Command</u></b>\n🚀  <b>/updatecode</b> › Reply to a code block to update the bot."
     await update.message.reply_text(guide, parse_mode=ParseMode.HTML)
 async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -462,12 +468,12 @@ def main():
     application = Application.builder().token(TOKEN).build()
     
     application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd))
-    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("deploy", deploy_cmd))
+    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("updatecode", updatecode_cmd))
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     application.add_handler(MessageHandler(filters.REPLY, reply_handler))
     
     application.job_queue.run_once(check_for_updates, 5)
-    logger.info("Bot [Polished Edition] is running...")
+    logger.info("Bot [Final Edition] is running...")
     application.run_polling()
 
 if __name__ == '__main__':
