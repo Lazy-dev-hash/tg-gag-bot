@@ -23,7 +23,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '6.0.0')
+BOT_VERSION = os.environ.get('BOT_VERSION', '7.0.0')
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
@@ -33,6 +33,7 @@ API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
 TRACKING_INTERVAL_SECONDS = 45
 MULTOMUSIC_URL = "https://www.youtube.com/watch?v=sPma_hV4_sU"
 UPDATE_GIF_URL = "https://i.pinimg.com/originals/e5/22/07/e52207b837755b763b65b6302409feda.gif"
+DATA_DIR = "/data" # The mount path of our Render Disk
 
 ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
 AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS = set(), set(), set(), set(), set()
@@ -42,15 +43,19 @@ LAST_KNOWN_VERSION, USER_INFO_CACHE = "", {}
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- PERSISTENT STORAGE ---
+# --- PERSISTENT STORAGE (Now uses DATA_DIR) ---
 def load_set_from_file(filename):
-    if not os.path.exists(filename): return set()
-    with open(filename, 'r') as f: return {line.strip() for line in f if line.strip()}
+    filepath = os.path.join(DATA_DIR, filename)
+    if not os.path.exists(filepath): return set()
+    with open(filepath, 'r') as f: return {line.strip() for line in f if line.strip()}
 def load_int_set_from_file(filename):
-    if not os.path.exists(filename): return set()
-    with open(filename, 'r') as f: return {int(line.strip()) for line in f if line.strip().isdigit()}
+    filepath = os.path.join(DATA_DIR, filename)
+    if not os.path.exists(filepath): return set()
+    with open(filepath, 'r') as f: return {int(line.strip()) for line in f if line.strip().isdigit()}
 def save_to_file(filename, data_set):
-    with open(filename, 'w') as f:
+    filepath = os.path.join(DATA_DIR, filename)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(filepath, 'w') as f:
         for item in data_set: f.write(f"{item}\n")
 def load_all_data():
     global AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS, LAST_KNOWN_VERSION
@@ -60,9 +65,10 @@ def load_all_data():
     RESTRICTED_USERS = load_int_set_from_file("restricted_users.txt")
     PRIZED_ITEMS = load_set_from_file("prized_items.txt") or {"master sprinkler", "beanstalk", "advanced sprinkler", "godly sprinkler", "ember lily"}
     if BOT_OWNER_ID: AUTHORIZED_USERS.add(BOT_OWNER_ID); ADMIN_USERS.add(BOT_OWNER_ID)
-    if os.path.exists("version.txt"):
-        with open("version.txt", 'r') as f: LAST_KNOWN_VERSION = f.read().strip()
-    logger.info(f"Loaded {len(AUTHORIZED_USERS)} users, {len(ADMIN_USERS)} admins, {len(BANNED_USERS)} banned, {len(RESTRICTED_USERS)} restricted. Loaded {len(PRIZED_ITEMS)} prized items.")
+    version_path = os.path.join(DATA_DIR, "version.txt")
+    if os.path.exists(version_path):
+        with open(version_path, 'r') as f: LAST_KNOWN_VERSION = f.read().strip()
+    logger.info(f"Loaded {len(AUTHORIZED_USERS)} users, {len(ADMIN_USERS)} admins. Previous version: {LAST_KNOWN_VERSION or 'N/A'}")
 
 async def log_user_activity(user: User, command: str, bot: Bot):
     if not user: return
@@ -250,7 +256,7 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     message_to_edit = update.message
-    if update.callback_query:
+    if hasattr(update, 'callback_query') and update.callback_query:
         message_to_edit = update.callback_query.message
         await message_to_edit.edit_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup)
     else:
@@ -383,45 +389,27 @@ async def deploy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owner = update.effective_user
     if owner.id != BOT_OWNER_ID: return
     await log_user_activity(owner, f"/deploy", context.bot)
-    
-    if len(context.args) != 2:
-        await update.message.reply_text("⚠️ Please provide the raw code link and the new version number.\n\n<b>Usage:</b> <code>/deploy [link] [version]</code>\n<b>Example:</b> <code>/deploy https://pastebin.com/raw/xyz123 7.0.0</code>", parse_mode=ParseMode.HTML); return
-    
-    code_url, new_version = context.args[0], context.args[1]
-    
-    msg = await update.message.reply_text(f"⬇️ Downloading new code (v{new_version}) from link...")
+    if len(context.args) != 1:
+        await update.message.reply_text("⚠️ Please provide the new version number.\n\n<b>Usage:</b> <code>/deploy [version]</code>\n<b>Example:</b> <code>/deploy 7.0.1</code>", parse_mode=ParseMode.HTML); return
+    new_version = context.args[0]
+    msg = await update.message.reply_text(f"🚀 Initiating update to v{new_version}...")
     try:
-        headers = {'Authorization': f'token {os.environ.get("GITHUB_TOKEN")}'} if 'gist.github' in code_url and os.environ.get("GITHUB_TOKEN") else {}
-        async with httpx.AsyncClient() as client:
-            r = await client.get(code_url, headers=headers)
-            r.raise_for_status()
-        new_code = r.text
-        
-        if "import logging" not in new_code or "def main():" not in new_code:
-            await msg.edit_text("❌ Validation failed. The downloaded text doesn't look like a valid bot script."); return
-
-        await msg.edit_text("✅ Code downloaded and validated.\n\nSetting new version on Render...")
-        
+        if not RENDER_API_KEY or not RENDER_SERVICE_ID: await msg.edit_text("❌ Deploy command is not configured. `RENDER_API_KEY` and `RENDER_SERVICE_ID` must be set."); return
+        await msg.edit_text(f"🔐 Setting new version on Render...")
         render_url = f"https://api.render.com/v1/services/{RENDER_SERVICE_ID}/env-vars"
         render_headers = {"Authorization": f"Bearer {RENDER_API_KEY}", "Content-Type": "application/json"}
         render_payload = [{"key": "BOT_VERSION", "value": new_version}]
-        
         async with httpx.AsyncClient() as client:
             r_render = await client.put(render_url, headers=render_headers, json=render_payload)
             r_render.raise_for_status()
-        
-        await msg.edit_text(f"✅ Version {new_version} set on Render.\n\n💾 Overwriting `main.py` and restarting...")
-        
-        with open(__file__, "w", encoding="utf-8") as f:
-            f.write(new_code)
-        
-        await msg.edit_text("🚀 Restarting now!")
-        os.execv(sys.executable, ['python'] + sys.argv)
-        
-    except httpx.HTTPStatusError as e:
-        await msg.edit_text(f"❌ Failed to download code or update Render. Status {e.response.status_code}:\n<pre>{e.response.text}</pre>", parse_mode=ParseMode.HTML)
-    except Exception as e:
-        await msg.edit_text(f"❌ An unexpected error occurred during deployment: {e}")
+        await msg.edit_text(f"✅ Version {new_version} set.\n\n🔄 Triggering new deployment on Render...")
+        deploy_url, deploy_headers = f"https://api.render.com/v1/services/{RENDER_SERVICE_ID}/deploys", {"Authorization": f"Bearer {RENDER_API_KEY}"}
+        async with httpx.AsyncClient() as client:
+            r_deploy = await client.post(deploy_url, headers=deploy_headers)
+            r_deploy.raise_for_status()
+        await msg.edit_text(f"✅ Deploy signal accepted by Render! The bot will restart shortly with the new version from GitHub.")
+    except httpx.HTTPStatusError as e: await msg.edit_text(f"❌ Failed to trigger deploy. Status {e.response.status_code}:\n<pre>{e.response.text}</pre>", parse_mode=ParseMode.HTML)
+    except Exception as e: await msg.edit_text(f"❌ An unexpected error occurred during deployment: {e}")
 
 # --- USER COMMANDS & REPLY HANDLER ---
 async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -466,12 +454,12 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await log_user_activity(user, "/help", context.bot)
     guide = "📘 <b>GAG Stock Alerter Guide</b>\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › Starts the tracker.\n🔄  <b>/refresh</b> › Manually shows current stock.\n📈  <b>/recent</b> › Shows recent items.\n💎  <b>/listprized</b> › Shows the prized items list.\n🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles notifications.\n⏹️  <b>/stop</b> › Stops the tracker completely.\n✨  <b>/update</b> › Restarts your tracker to the latest bot version.\n\n"
     if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n"
-    if user.id == BOT_OWNER_ID: guide += "\n<b><u>🔒 Owner Command</u></b>\n🚀  <b>/deploy</b> <code>[link] [ver]</code> › Updates the bot from a raw code link."
+    if user.id == BOT_OWNER_ID: guide += "\n<b><u>🔒 Owner Command</u></b>\n🚀  <b>/deploy</b> <code>[version]</code> › Updates the bot from GitHub."
     await update.message.reply_text(guide, parse_mode=ParseMode.HTML)
 async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
-    if update.message.reply_to_message and "A message from the Bot Admin" in update.message.reply_to_message.text:
+    if update.message.reply_to_message and update.message.reply_to_message.text and "A message from the Bot Admin" in update.message.reply_to_message.text:
         await log_user_activity(user, "[Reply to Admin]", context.bot)
         reply_text = f"🗣️ <b>New Reply from User:</b>\n\n<b>From:</b> {user.first_name} (<code>{user.id}</code>)\n<b>Message:</b> <i>{update.message.text}</i>\n\nTo reply, use <code>/msg {user.id} [your message]</code>"
         for admin_id in ADMIN_USERS:
@@ -501,7 +489,8 @@ async def check_for_updates(application: Application):
             for chat_id, tracker_data in list(ACTIVE_TRACKERS.items()):
                 try: await application.bot.send_animation(chat_id=chat_id, animation=UPDATE_GIF_URL, caption=update_message, parse_mode=ParseMode.HTML)
                 except Exception as e: logger.error(f"Failed to send update notice to {chat_id}: {e}")
-        with open("version.txt", "w") as f: f.write(BOT_VERSION)
+        version_filepath = os.path.join(DATA_DIR, "version.txt")
+        with open(version_filepath, "w") as f: f.write(BOT_VERSION)
         LAST_KNOWN_VERSION = BOT_VERSION
 
 def main():
