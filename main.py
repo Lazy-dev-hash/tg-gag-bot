@@ -15,35 +15,39 @@ from telegram import Update, Bot, User, InlineKeyboardButton, InlineKeyboardMark
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 
+# --- LOGGING SETUP (MOVED TO TOP) ---
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # --- FLASK, CONFIG, & STATE MANAGEMENT ---
 app = Flask(__name__)
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'default-secret-key-for-local-dev')
-ADMIN_USER = os.environ.get('ADMIN_USER', 'admin')
-ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
-TOKEN = os.environ.get('TELEGRAM_TOKEN')
-BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '7.0.0')
+# Load variables with safe defaults
+TOKEN = os.environ.get('TOKEN') # Changed from TELEGRAM_TOKEN to match screenshot
+BOT_OWNER_ID = os.environ.get('BOT_OWNER_ID')
+BOT_VERSION = os.environ.get('BOT_VERSION', '7.0.1')
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
+ADMIN_USER = os.environ.get('ADMIN_USER', 'admin')
+ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
+FLASK_SECRET_KEY = os.environ.get('FLASK_SECRET_KEY', 'a-very-secret-key-that-should-be-changed')
+
+app.secret_key = FLASK_SECRET_KEY
 
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
 API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
 TRACKING_INTERVAL_SECONDS = 45
 MULTOMUSIC_URL = "https://www.youtube.com/watch?v=sPma_hV4_sU"
 UPDATE_GIF_URL = "https://i.pinimg.com/originals/e5/22/07/e52207b837755b763b65b6302409feda.gif"
-DATA_DIR = "/data" # The mount path of our Render Disk
+DATA_DIR = "/data"
 
 ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
 AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS = set(), set(), set(), set(), set()
 LAST_KNOWN_VERSION, USER_INFO_CACHE = "", {}
 
-# --- LOGGING SETUP ---
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-# --- PERSISTENT STORAGE (Now uses DATA_DIR) ---
+# --- PERSISTENT STORAGE ---
 def load_set_from_file(filename):
     filepath = os.path.join(DATA_DIR, filename)
     if not os.path.exists(filepath): return set()
@@ -64,7 +68,7 @@ def load_all_data():
     BANNED_USERS = load_int_set_from_file("banned_users.txt")
     RESTRICTED_USERS = load_int_set_from_file("restricted_users.txt")
     PRIZED_ITEMS = load_set_from_file("prized_items.txt") or {"master sprinkler", "beanstalk", "advanced sprinkler", "godly sprinkler", "ember lily"}
-    if BOT_OWNER_ID: AUTHORIZED_USERS.add(BOT_OWNER_ID); ADMIN_USERS.add(BOT_OWNER_ID)
+    if BOT_OWNER_ID: AUTHORIZED_USERS.add(int(BOT_OWNER_ID)); ADMIN_USERS.add(int(BOT_OWNER_ID))
     version_path = os.path.join(DATA_DIR, "version.txt")
     if os.path.exists(version_path):
         with open(version_path, 'r') as f: LAST_KNOWN_VERSION = f.read().strip()
@@ -80,7 +84,7 @@ async def log_user_activity(user: User, command: str, bot: Bot):
                 avatar_path = (await p_photos.photos[0][0].get_file()).file_path if p_photos and p_photos.photos and p_photos.photos[0] else None
                 USER_INFO_CACHE[user.id] = {'first_name': user.first_name,'username': user.username or "N/A",'avatar_path': avatar_path, 'timestamp': datetime.now(pytz.utc), 'command_count': 0}
             user_info = USER_INFO_CACHE[user.id]
-            user_info['command_count'] = user_info.get('command_count', 0) + 1 # Increment command count
+            user_info['command_count'] = user_info.get('command_count', 0) + 1
             if user_info.get('avatar_path'): avatar_url = f"https://api.telegram.org/file/bot{TOKEN}/{user_info['avatar_path']}"
             activity_log = {"user_id": user.id, "first_name": user_info['first_name'], "username": user_info['username'], "command": command, "timestamp": datetime.now(pytz.utc), "avatar_url": avatar_url}
             USER_ACTIVITY.insert(0, activity_log); del USER_ACTIVITY[50:]
@@ -412,7 +416,7 @@ async def deploy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"✅ Version {new_version} set.\n\n🔄 Triggering new deployment on Render...")
         deploy_url, deploy_headers = f"https://api.render.com/v1/services/{RENDER_SERVICE_ID}/deploys", {"Authorization": f"Bearer {RENDER_API_KEY}"}
         async with httpx.AsyncClient() as client:
-            r_deploy = await client.post(deploy_url, headers=deploy_headers)
+            r_deploy = await client.post(deploy_url, headers=deploy_headers, json=payload)
             r_deploy.raise_for_status()
         await msg.edit_text(f"✅ Deploy signal accepted! The bot will restart shortly with the new version from GitHub.")
     except httpx.HTTPStatusError as e: await msg.edit_text(f"❌ Failed to trigger deploy. Status {e.response.status_code}:\n<pre>{e.response.text}</pre>", parse_mode=ParseMode.HTML)
