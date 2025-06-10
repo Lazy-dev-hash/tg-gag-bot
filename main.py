@@ -4,8 +4,6 @@ import os
 import yt_dlp
 import random
 import string
-import requests
-import google.generativeai as genai
 from datetime import datetime, timedelta
 import pytz
 import httpx
@@ -24,12 +22,10 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '4.0.1') # Bugfix release
+BOT_VERSION = os.environ.get('BOT_VERSION', '5.0.0')
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
-CLIPDROP_API_KEY = os.environ.get('CLIPDROP_API_KEY')
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
 API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
@@ -41,10 +37,9 @@ ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
 AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS = set(), set(), set(), set(), set()
 LAST_KNOWN_VERSION, USER_INFO_CACHE = "", {}
 
-# --- LOGGING & API SETUP ---
+# --- LOGGING SETUP ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
-if GEMINI_API_KEY: genai.configure(api_key=GEMINI_API_KEY)
 
 # --- PERSISTENT STORAGE ---
 def load_set_from_file(filename):
@@ -383,58 +378,6 @@ async def deploy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except httpx.HTTPStatusError as e: await update.message.reply_text(f"❌ Failed to trigger deploy. Status {e.response.status_code}:\n<pre>{e.response.text}</pre>", parse_mode=ParseMode.HTML)
     except Exception as e: await update.message.reply_text(f"❌ An unexpected error occurred: {e}")
 
-# --- AI & IMAGE COMMANDS ---
-async def ai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
-    await log_user_activity(user, "/ai", context.bot)
-    if not GEMINI_API_KEY: await update.message.reply_text("The AI feature is not configured."); return
-    prompt = " ".join(context.args)
-    if not prompt: await update.message.reply_text("<b>Example:</b> <code>/ai What is the capital of the Philippines?</code>", parse_mode=ParseMode.HTML); return
-    thinking_msg = await update.message.reply_text("🧠 Generating response...")
-    try:
-        model = genai.GenerativeModel('gemini-pro'); response = await model.generate_content_async(prompt)
-        await thinking_msg.edit_text(response.text)
-    except Exception as e: logger.error(f"Gemini AI error: {e}"); await thinking_msg.edit_text("Sorry, I couldn't process your request.")
-async def enhance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
-    await log_user_activity(user, "/enhance", context.bot)
-    if not update.message.reply_to_message or not update.message.reply_to_message.photo: await update.message.reply_text("Please reply to a photo with <code>/enhance</code>.", parse_mode=ParseMode.HTML); return
-    if not CLIPDROP_API_KEY: await update.message.reply_text("The image enhancement feature is not configured."); return
-    processing_msg = await update.message.reply_text("✨ Enhancing your image...")
-    try:
-        file = await context.bot.get_file(update.message.reply_to_message.photo[-1].file_id)
-        async with httpx.AsyncClient() as client:
-            photo_data = await client.get(file.file_path)
-            r = await client.post('https://clipdrop-api.co/image-upscaling/v1/upscale',
-                files={'image_file': ('image.jpg', photo_data.content, 'image/jpeg')},
-                headers={'x-api-key': CLIPDROP_API_KEY},
-                data={'target_width': 2048, 'target_height': 2048},
-                timeout=60)
-        if r.status_code == 200: await context.bot.send_photo(chat_id=user.id, photo=r.content, caption="Here is your enhanced image!")
-        else: r.raise_for_status()
-        await processing_msg.delete()
-    except Exception as e: logger.error(f"Enhance command error: {e}"); await processing_msg.edit_text("Sorry, something went wrong.")
-async def removebg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
-    await log_user_activity(user, "/removebg", context.bot)
-    if not update.message.reply_to_message or not update.message.reply_to_message.photo: await update.message.reply_text("Please reply to a photo with <code>/removebg</code>.", parse_mode=ParseMode.HTML); return
-    if not CLIPDROP_API_KEY: await update.message.reply_text("The background removal feature is not configured."); return
-    processing_msg = await update.message.reply_text("🎨 Removing background...")
-    try:
-        file = await context.bot.get_file(update.message.reply_to_message.photo[-1].file_id)
-        async with httpx.AsyncClient() as client:
-            photo_data = await client.get(file.file_path)
-            r = await client.post('https://clipdrop-api.co/remove-background/v1',
-                files={'image_file': ('image.jpg', photo_data.content, 'image/jpeg')},
-                headers={'x-api-key': CLIPDROP_API_KEY}, timeout=60)
-        if r.status_code == 200: await context.bot.send_document(chat_id=user.id, document=r.content, filename="removed_bg.png", caption="Background removed!")
-        else: r.raise_for_status()
-        await processing_msg.delete()
-    except Exception as e: logger.error(f"RemoveBG command error: {e}"); await processing_msg.edit_text("Sorry, something went wrong.")
-
 # --- USER COMMANDS & REPLY HANDLER ---
 async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user;
@@ -476,12 +419,13 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id in BANNED_USERS: return
     if user.id not in AUTHORIZED_USERS: await update.message.reply_text("You need to be approved to use this bot. Send /start to begin the approval process."); return
     await log_user_activity(user, "/help", context.bot)
-    guide = "📘 <b>GAG Stock Alerter Guide</b>\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › Starts the tracker.\n🔄  <b>/refresh</b> › Manually shows current stock.\n📈  <b>/recent</b> › Shows recent items.\n💎  <b>/listprized</b> › Shows the prized items list.\n🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles notifications.\n⏹️  <b>/stop</b> › Stops the tracker completely.\n\n<b><u>✨ AI & Image Tools</u></b>\n🤖  <b>/ai</b> <code>[prompt]</code> › Ask the AI a question.\n🖼️  <b>/enhance</b> › Reply to an image to enhance it.\n✂️  <b>/removebg</b> › Reply to an image to remove the background.\n\n"
-    if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/deploy</b> › Restarts & updates the bot."
+    guide = "📘 <b>GAG Stock Alerter Guide</b>\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › Starts the tracker.\n🔄  <b>/refresh</b> › Manually shows current stock.\n📈  <b>/recent</b> › Shows recent items.\n💎  <b>/listprized</b> › Shows the prized items list.\n🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles notifications.\n⏹️  <b>/stop</b> › Stops the tracker completely.\n✨  <b>/update</b> › Restarts your tracker to the latest bot version.\n\n"
+    if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/deploy</b> › Restarts & updates the bot from GitHub."
     await update.message.reply_text(guide, parse_mode=ParseMode.HTML)
 async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    # Handle replies to admin messages
     if update.message.reply_to_message and "A message from the Bot Admin" in update.message.reply_to_message.text:
         await log_user_activity(user, "[Reply to Admin]", context.bot)
         reply_text = f"🗣️ <b>New Reply from User:</b>\n\n<b>From:</b> {user.first_name} (<code>{user.id}</code>)\n<b>Message:</b> <i>{update.message.text}</i>\n\nTo reply, use <code>/msg {user.id} [your message]</code>"
@@ -489,14 +433,23 @@ async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await context.bot.send_message(chat_id=admin_id, text=reply_text, parse_mode=ParseMode.HTML)
             except Exception as e: logger.error(f"Failed to forward reply to admin {admin_id}: {e}")
         await update.message.reply_text("✅ Your reply has been sent to the admins.")
+    # Handle replies to update notifications
+    elif update.message.reply_to_message and update.message.reply_to_message.caption and "A new version" in update.message.reply_to_message.caption and update.message.text.strip().lower() == '/update':
+        await update_cmd(update, context)
+async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    await log_user_activity(user, "/update", context.bot)
+    await update.message.reply_text("✅ Great! Updating you to the latest version now...")
+    if user.id in ACTIVE_TRACKERS: ACTIVE_TRACKERS[user.id]['task'].cancel()
+    await start_cmd(update, context)
 async def check_for_updates(application: Application):
     global LAST_KNOWN_VERSION
     if BOT_VERSION != LAST_KNOWN_VERSION:
         logger.info(f"Version change detected! New: {BOT_VERSION}, Old: {LAST_KNOWN_VERSION}")
         if LAST_KNOWN_VERSION != "":
+            update_message = f"🚀 <b>A new version (v{BOT_VERSION}) is available!</b>\n\nI've been upgraded with new features and improvements.\n\nTo get the latest version, please reply to this message with the command:\n<code>/update</code>"
             for chat_id, tracker_data in list(ACTIVE_TRACKERS.items()):
-                user_name = tracker_data.get('first_name', 'there')
-                update_message = f"👋 Hi, <b>{user_name}</b>!\n\n🚀 <b>Bot Update Deployed!</b> (v{BOT_VERSION})\n\nI've just been upgraded with new features and stability improvements to better track your items.\n\nYou can check out the <code>/help</code> command for any changes. No action is needed from you!"
                 try: await application.bot.send_animation(chat_id=chat_id, animation=UPDATE_GIF_URL, caption=update_message, parse_mode=ParseMode.HTML)
                 except Exception as e: logger.error(f"Failed to send update notice to {chat_id}: {e}")
         with open("version.txt", "w") as f: f.write(BOT_VERSION)
@@ -509,14 +462,13 @@ def main():
     
     application = Application.builder().token(TOKEN).build()
     
-    application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd))
-    application.add_handler(CommandHandler("ai", ai_cmd)); application.add_handler(CommandHandler("enhance", enhance_cmd)); application.add_handler(CommandHandler("removebg", removebg_cmd))
+    application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd))
     application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("deploy", deploy_cmd))
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     application.add_handler(MessageHandler(filters.REPLY, reply_handler))
     
     application.job_queue.run_once(check_for_updates, 5)
-    logger.info("Bot [AI Assistant Edition] is running...")
+    logger.info("Bot [Polished Edition] is running...")
     application.run_polling()
 
 if __name__ == '__main__':
