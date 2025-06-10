@@ -25,7 +25,7 @@ TOKEN = os.environ.get('TELEGRAM_TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
 BOT_VERSION = os.environ.get('BOT_VERSION', '6.0.0')
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
-GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
+RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
 
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
@@ -246,62 +246,70 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await log_user_activity(user, "/admin", context.bot)
     base_url = os.environ.get('RENDER_EXTERNAL_URL', f'http://localhost:{os.environ.get("PORT", 8080)}')
     dashboard_url = f"{base_url}/login"
-    keyboard = [[InlineKeyboardButton("🌐 Open Dashboard", url=dashboard_url)],[InlineKeyboardButton("👤 User Management", callback_data='admin_users_0')],[InlineKeyboardButton("💎 Prized Items", callback_data='admin_prized')],[InlineKeyboardButton("📊 Bot Stats", callback_data='admin_stats')],[InlineKeyboardButton("❌ Close", callback_data='admin_close')]]
+    keyboard = [[InlineKeyboardButton("🌐 Open Dashboard", url=dashboard_url)],[InlineKeyboardButton("👤 Manage Authorized", callback_data='admin_users_0')],[InlineKeyboardButton("⚠️ Manage Restricted", callback_data='admin_restricted_0')],[InlineKeyboardButton("🚫 Manage Banned", callback_data='admin_banned_0')],[InlineKeyboardButton("💎 Prized Items", callback_data='admin_prized')],[InlineKeyboardButton("📊 Bot Stats", callback_data='admin_stats')],[InlineKeyboardButton("❌ Close", callback_data='admin_close')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup)
+    
+    message_to_edit = update.message
+    if update.callback_query:
+        message_to_edit = update.callback_query.message
+        await message_to_edit.edit_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup)
+    else:
+        await message_to_edit.reply_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup)
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
     admin_id = query.from_user.id
     if admin_id not in ADMIN_USERS: await query.edit_message_text("❌ You are not authorized for this action."); return
     data = query.data.split('_'); command = data[0]
-    if command == "admin":
-        action = data[1]
-        if action == "users":
-            page = int(data[2]); users_per_page = 5
-            user_list = sorted(list(AUTHORIZED_USERS)); start_index, end_index = page * users_per_page, page * users_per_page + users_per_page
-            keyboard = []
+    if command != "admin": return
+    action = data[1]
+    if action == "main": await admin_cmd(update, context); return
+    if action == "close": await query.delete_message(); return
+
+    list_map = {"banned": {"title": "🚫 Banned Users", "data": BANNED_USERS},"restricted": {"title": "⚠️ Restricted Users", "data": RESTRICTED_USERS},"users": {"title": "👤 Authorized Users", "data": AUTHORIZED_USERS}}
+    if action in list_map:
+        page = int(data[2]); users_per_page = 5; config = list_map[action]; user_list = sorted(list(config["data"]))
+        start_index, end_index = page * users_per_page, page * users_per_page + users_per_page
+        keyboard = []
+        if not user_list: keyboard.append([InlineKeyboardButton("This list is empty.", callback_data="admin_noop")])
+        else:
             for uid in user_list[start_index:end_index]:
                 user_info = USER_INFO_CACHE.get(uid, {'first_name': f'User {uid}', 'username': 'N/A'})
                 text = f"{user_info['first_name']} (@{user_info['username']})"
                 keyboard.append([InlineKeyboardButton(text, callback_data=f"admin_user_manage_{uid}")])
-            pagination_row = []
-            if page > 0: pagination_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_users_{page-1}"))
-            if end_index < len(user_list): pagination_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"admin_users_{page+1}"))
-            if pagination_row: keyboard.append(pagination_row)
-            keyboard.append([InlineKeyboardButton("⬅️ Back to Main Menu", callback_data='admin_main')])
-            await query.edit_message_text("<b>👤 User Management</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
-        elif action == "user":
-            action_type = data[2]; target_id = int(data[3])
-            if action_type == "manage":
-                user_info = USER_INFO_CACHE.get(target_id, {'first_name': f'User {target_id}', 'username': 'N/A'})
-                status, status_icon = "Active", "✅"
-                if target_id in BANNED_USERS: status, status_icon = "Banned", "🚫"
-                elif target_id in RESTRICTED_USERS: status, status_icon = "Restricted", "⚠️"
-                elif target_id in ADMIN_USERS: status, status_icon = "Admin", "👑"
-                keyboard = [[InlineKeyboardButton("✅ Unban" if target_id in BANNED_USERS else "🚫 Ban", callback_data=f"admin_user_unban_{target_id}" if target_id in BANNED_USERS else f"admin_user_ban_{target_id}")],[InlineKeyboardButton("✅ Unrestrict" if target_id in RESTRICTED_USERS else "⚠️ Restrict", callback_data=f"admin_user_unrestrict_{target_id}" if target_id in RESTRICTED_USERS else f"admin_user_restrict_{target_id}")],[InlineKeyboardButton("Demote" if target_id in ADMIN_USERS else "👑 Promote", callback_data=f"admin_user_deladmin_{target_id}" if target_id in ADMIN_USERS else f"admin_user_addadmin_{target_id}")],[InlineKeyboardButton("⬅️ Back to User List", callback_data='admin_users_0')]]
-                await query.edit_message_text(f"<b>Managing:</b> {user_info['first_name']}\n<b>ID:</b> <code>{target_id}</code>\n<b>Status:</b> {status_icon} {status}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
-            else:
-                if target_id == BOT_OWNER_ID: await query.edit_message_text("❌ This action cannot be performed on the bot owner."); return
-                if action_type == "ban": BANNED_USERS.add(target_id); AUTHORIZED_USERS.discard(target_id); RESTRICTED_USERS.discard(target_id); save_to_file("banned_users.txt", BANNED_USERS); save_to_file("authorized_users.txt", AUTHORIZED_USERS); save_to_file("restricted_users.txt", RESTRICTED_USERS); text = f"🚫 User {target_id} has been banned."
-                elif action_type == "unban": BANNED_USERS.discard(target_id); AUTHORIZED_USERS.add(target_id); save_to_file("banned_users.txt", BANNED_USERS); save_to_file("authorized_users.txt", AUTHORIZED_USERS); text = f"✅ User {target_id} has been unbanned."
-                elif action_type == "restrict": RESTRICTED_USERS.add(target_id); save_to_file("restricted_users.txt", RESTRICTED_USERS); text = f"⚠️ User {target_id} is now restricted."
-                elif action_type == "unrestrict": RESTRICTED_USERS.discard(target_id); save_to_file("restricted_users.txt", RESTRICTED_USERS); text = f"✅ User {target_id} is no longer restricted."
-                elif action_type == "addadmin": ADMIN_USERS.add(target_id); save_to_file("admins.txt", ADMIN_USERS); text = f"👑 User {target_id} is now an admin."
-                elif action_type == "deladmin": ADMIN_USERS.discard(target_id); save_to_file("admins.txt", ADMIN_USERS); text = f"User {target_id} is no longer an admin."
-                await query.edit_message_text(text); await asyncio.sleep(2)
-                await query.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to User List", callback_data='admin_users_0')]]))
-        elif action == "stats":
-            text = f"📊 <b>Bot Statistics</b>\n\n- <b>Authorized Users:</b> {len(AUTHORIZED_USERS)}\n- <b>Admins:</b> {len(ADMIN_USERS)}\n- <b>Active Trackers:</b> {len(ACTIVE_TRACKERS)}\n- <b>Banned Users:</b> {len(BANNED_USERS)}\n- <b>Restricted Users:</b> {len(RESTRICTED_USERS)}"
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data='admin_main')]]), parse_mode=ParseMode.HTML)
-        elif action == "prized":
-             message = "💎 <b>Current Prized Items:</b>\n\n" + ("\n".join([f"• <code>{item}</code>" for item in sorted(list(PRIZED_ITEMS))]) or "The list is empty.")
-             await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data='admin_main')]]), parse_mode=ParseMode.HTML)
-        elif action == "main":
-            base_url = os.environ.get('RENDER_EXTERNAL_URL', f'http://localhost:{os.environ.get("PORT", 8080)}')
-            dashboard_url = f"{base_url}/login"
-            keyboard = [[InlineKeyboardButton("🌐 Open Dashboard", url=dashboard_url)],[InlineKeyboardButton("👤 User Management", callback_data='admin_users_0')],[InlineKeyboardButton("💎 Prized Items", callback_data='admin_prized')],[InlineKeyboardButton("📊 Bot Stats", callback_data='admin_stats')],[InlineKeyboardButton("❌ Close", callback_data='admin_close')]]
-            await query.edit_message_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
-        elif action == "close": await query.delete_message()
+        pagination_row = []
+        if page > 0: pagination_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_{action}_{page-1}"))
+        if end_index < len(user_list): pagination_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"admin_{action}_{page+1}"))
+        if pagination_row: keyboard.append(pagination_row)
+        keyboard.append([InlineKeyboardButton("⬅️ Back to Main Menu", callback_data='admin_main')])
+        await query.edit_message_text(f"<b>{config['title']}</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+        return
+    if action == "user":
+        action_type = data[2]; target_id = int(data[3])
+        if action_type == "manage":
+            user_info = USER_INFO_CACHE.get(target_id, {'first_name': f'User {target_id}', 'username': 'N/A'})
+            status, status_icon = "Active", "✅"
+            if target_id in BANNED_USERS: status, status_icon = "Banned", "🚫"
+            elif target_id in RESTRICTED_USERS: status, status_icon = "Restricted", "⚠️"
+            elif target_id in ADMIN_USERS: status, status_icon = "Admin", "👑"
+            keyboard = [[InlineKeyboardButton("✅ Unban" if target_id in BANNED_USERS else "🚫 Ban", callback_data=f"admin_user_unban_{target_id}" if target_id in BANNED_USERS else f"admin_user_ban_{target_id}")],[InlineKeyboardButton("✅ Unrestrict" if target_id in RESTRICTED_USERS else "⚠️ Restrict", callback_data=f"admin_user_unrestrict_{target_id}" if target_id in RESTRICTED_USERS else f"admin_user_restrict_{target_id}")],[InlineKeyboardButton("Demote" if target_id in ADMIN_USERS else "👑 Promote", callback_data=f"admin_user_deladmin_{target_id}" if target_id in ADMIN_USERS else f"admin_user_addadmin_{target_id}")],[InlineKeyboardButton("⬅️ Back to Main Menu", callback_data='admin_main')]]
+            await query.edit_message_text(f"<b>Managing:</b> {user_info['first_name']}\n<b>ID:</b> <code>{target_id}</code>\n<b>Status:</b> {status_icon} {status}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+            return
+        if target_id == BOT_OWNER_ID: await query.edit_message_text("❌ This action cannot be performed on the bot owner."); return
+        text = ""
+        if action_type == "ban": BANNED_USERS.add(target_id); AUTHORIZED_USERS.discard(target_id); RESTRICTED_USERS.discard(target_id); save_to_file("banned_users.txt", BANNED_USERS); save_to_file("authorized_users.txt", AUTHORIZED_USERS); save_to_file("restricted_users.txt", RESTRICTED_USERS); text = f"🚫 User {target_id} has been banned."
+        elif action_type == "unban": BANNED_USERS.discard(target_id); AUTHORIZED_USERS.add(target_id); save_to_file("banned_users.txt", BANNED_USERS); save_to_file("authorized_users.txt", AUTHORIZED_USERS); text = f"✅ User {target_id} has been unbanned."
+        elif action_type == "restrict": RESTRICTED_USERS.add(target_id); save_to_file("restricted_users.txt", RESTRICTED_USERS); text = f"⚠️ User {target_id} is now restricted."
+        elif action_type == "unrestrict": RESTRICTED_USERS.discard(target_id); save_to_file("restricted_users.txt", RESTRICTED_USERS); text = f"✅ User {target_id} is no longer restricted."
+        elif action_type == "addadmin": ADMIN_USERS.add(target_id); save_to_file("admins.txt", ADMIN_USERS); text = f"👑 User {target_id} is now an admin."
+        elif action_type == "deladmin": ADMIN_USERS.discard(target_id); save_to_file("admins.txt", ADMIN_USERS); text = f"User {target_id} is no longer an admin."
+        await query.edit_message_text(text); await asyncio.sleep(2); await admin_cmd(update, context)
+        return
+    if action == "stats":
+        text = f"📊 <b>Bot Statistics</b>\n\n- <b>Authorized Users:</b> {len(AUTHORIZED_USERS)}\n- <b>Admins:</b> {len(ADMIN_USERS)}\n- <b>Active Trackers:</b> {len(ACTIVE_TRACKERS)}\n- <b>Banned Users:</b> {len(BANNED_USERS)}\n- <b>Restricted Users:</b> {len(RESTRICTED_USERS)}"
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data='admin_main')]]), parse_mode=ParseMode.HTML)
+    elif action == "prized":
+        message = "💎 <b>Current Prized Items:</b>\n\n" + ("\n".join([f"• <code>{item}</code>" for item in sorted(list(PRIZED_ITEMS))]) or "The list is empty.")
+        await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data='admin_main')]]), parse_mode=ParseMode.HTML)
 async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user;
     if admin.id not in ADMIN_USERS: return
@@ -383,7 +391,7 @@ async def deploy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     msg = await update.message.reply_text(f"⬇️ Downloading new code (v{new_version}) from link...")
     try:
-        headers = {'Authorization': f'token {GITHUB_TOKEN}'} if 'gist.github' in code_url and GITHUB_TOKEN else {}
+        headers = {'Authorization': f'token {os.environ.get("GITHUB_TOKEN")}'} if 'gist.github' in code_url and os.environ.get("GITHUB_TOKEN") else {}
         async with httpx.AsyncClient() as client:
             r = await client.get(code_url, headers=headers)
             r.raise_for_status()
@@ -394,9 +402,8 @@ async def deploy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await msg.edit_text("✅ Code downloaded and validated.\n\nSetting new version on Render...")
         
-        # Update version on Render
         render_url = f"https://api.render.com/v1/services/{RENDER_SERVICE_ID}/env-vars"
-        render_headers = {"Authorization": f"Bearer {os.environ.get('RENDER_API_KEY')}", "Content-Type": "application/json"}
+        render_headers = {"Authorization": f"Bearer {RENDER_API_KEY}", "Content-Type": "application/json"}
         render_payload = [{"key": "BOT_VERSION", "value": new_version}]
         
         async with httpx.AsyncClient() as client:
