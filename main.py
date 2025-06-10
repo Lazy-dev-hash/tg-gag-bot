@@ -23,8 +23,10 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '6.0.0') # The Final Update
+BOT_VERSION = os.environ.get('BOT_VERSION', '6.0.0')
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
+RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
 
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
 API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
@@ -294,7 +296,11 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         elif action == "prized":
              message = "💎 <b>Current Prized Items:</b>\n\n" + ("\n".join([f"• <code>{item}</code>" for item in sorted(list(PRIZED_ITEMS))]) or "The list is empty.")
              await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data='admin_main')]]), parse_mode=ParseMode.HTML)
-        elif action == "main": await admin_cmd(query, context)
+        elif action == "main":
+            base_url = os.environ.get('RENDER_EXTERNAL_URL', f'http://localhost:{os.environ.get("PORT", 8080)}')
+            dashboard_url = f"{base_url}/login"
+            keyboard = [[InlineKeyboardButton("🌐 Open Dashboard", url=dashboard_url)],[InlineKeyboardButton("👤 User Management", callback_data='admin_users_0')],[InlineKeyboardButton("💎 Prized Items", callback_data='admin_prized')],[InlineKeyboardButton("📊 Bot Stats", callback_data='admin_stats')],[InlineKeyboardButton("❌ Close", callback_data='admin_close')]]
+            await query.edit_message_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
         elif action == "close": await query.delete_message()
 async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user;
@@ -365,25 +371,51 @@ async def listprized_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not PRIZED_ITEMS: message = "The prized item list is currently empty."
     else: message = "💎 <b>Current Prized Items:</b>\n\n" + "\n".join([f"• <code>{item}</code>" for item in sorted(list(PRIZED_ITEMS))])
     await update.message.reply_html(message)
-async def updatecode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def deploy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owner = update.effective_user
     if owner.id != BOT_OWNER_ID: return
-    if not update.message.reply_to_message or not update.message.reply_to_message.text:
-        await update.message.reply_text("⚠️ Please reply to the message containing the new Python code with this command."); return
+    await log_user_activity(owner, f"/deploy", context.bot)
     
-    await log_user_activity(owner, "/updatecode", context.bot)
+    if len(context.args) != 2:
+        await update.message.reply_text("⚠️ Please provide the raw code link and the new version number.\n\n<b>Usage:</b> <code>/deploy [link] [version]</code>\n<b>Example:</b> <code>/deploy https://pastebin.com/raw/xyz123 7.0.0</code>", parse_mode=ParseMode.HTML); return
     
-    new_code = update.message.reply_to_message.text
-    if "import logging" not in new_code or "def main():" not in new_code:
-        await update.message.reply_text("❌ Validation failed. The provided text doesn't look like a valid bot script."); return
+    code_url, new_version = context.args[0], context.args[1]
+    
+    msg = await update.message.reply_text(f"⬇️ Downloading new code (v{new_version}) from link...")
+    try:
+        headers = {'Authorization': f'token {GITHUB_TOKEN}'} if 'gist.github' in code_url and GITHUB_TOKEN else {}
+        async with httpx.AsyncClient() as client:
+            r = await client.get(code_url, headers=headers)
+            r.raise_for_status()
+        new_code = r.text
         
-    await update.message.reply_text("✅ Code received and validated.\n💾 Overwriting `main.py` now...")
-    with open("main.py", "w", encoding="utf-8") as f:
-        f.write(new_code)
-    
-    await update.message.reply_text("🚀 Restarting the bot to apply the update. This may take a moment...")
-    os.execv(sys.executable, ['python'] + sys.argv)
-    
+        if "import logging" not in new_code or "def main():" not in new_code:
+            await msg.edit_text("❌ Validation failed. The downloaded text doesn't look like a valid bot script."); return
+
+        await msg.edit_text("✅ Code downloaded and validated.\n\nSetting new version on Render...")
+        
+        # Update version on Render
+        render_url = f"https://api.render.com/v1/services/{RENDER_SERVICE_ID}/env-vars"
+        render_headers = {"Authorization": f"Bearer {os.environ.get('RENDER_API_KEY')}", "Content-Type": "application/json"}
+        render_payload = [{"key": "BOT_VERSION", "value": new_version}]
+        
+        async with httpx.AsyncClient() as client:
+            r_render = await client.put(render_url, headers=render_headers, json=render_payload)
+            r_render.raise_for_status()
+        
+        await msg.edit_text(f"✅ Version {new_version} set on Render.\n\n💾 Overwriting `main.py` and restarting...")
+        
+        with open(__file__, "w", encoding="utf-8") as f:
+            f.write(new_code)
+        
+        await msg.edit_text("🚀 Restarting now!")
+        os.execv(sys.executable, ['python'] + sys.argv)
+        
+    except httpx.HTTPStatusError as e:
+        await msg.edit_text(f"❌ Failed to download code or update Render. Status {e.response.status_code}:\n<pre>{e.response.text}</pre>", parse_mode=ParseMode.HTML)
+    except Exception as e:
+        await msg.edit_text(f"❌ An unexpected error occurred during deployment: {e}")
+
 # --- USER COMMANDS & REPLY HANDLER ---
 async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user;
@@ -427,7 +459,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await log_user_activity(user, "/help", context.bot)
     guide = "📘 <b>GAG Stock Alerter Guide</b>\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › Starts the tracker.\n🔄  <b>/refresh</b> › Manually shows current stock.\n📈  <b>/recent</b> › Shows recent items.\n💎  <b>/listprized</b> › Shows the prized items list.\n🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles notifications.\n⏹️  <b>/stop</b> › Stops the tracker completely.\n✨  <b>/update</b> › Restarts your tracker to the latest bot version.\n\n"
     if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n"
-    if user.id == BOT_OWNER_ID: guide += "\n<b><u>🔒 Owner Command</u></b>\n🚀  <b>/updatecode</b> › Reply to a code block to update the bot."
+    if user.id == BOT_OWNER_ID: guide += "\n<b><u>🔒 Owner Command</u></b>\n🚀  <b>/deploy</b> <code>[link] [ver]</code> › Updates the bot from a raw code link."
     await update.message.reply_text(guide, parse_mode=ParseMode.HTML)
 async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -445,6 +477,11 @@ async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
     await log_user_activity(user, "/update", context.bot)
+    
+    if BOT_VERSION == LAST_KNOWN_VERSION:
+        await update.message.reply_text(f"✅ <b>You're all set!</b>\n\nYou are already running the latest version (v{BOT_VERSION}).")
+        return
+        
     await update.message.reply_text("✅ Great! Updating you to the latest version now...")
     if user.id in ACTIVE_TRACKERS: ACTIVE_TRACKERS[user.id]['task'].cancel()
     await start_cmd(update, context)
@@ -453,7 +490,7 @@ async def check_for_updates(application: Application):
     if BOT_VERSION != LAST_KNOWN_VERSION:
         logger.info(f"Version change detected! New: {BOT_VERSION}, Old: {LAST_KNOWN_VERSION}")
         if LAST_KNOWN_VERSION != "":
-            update_message = f"🚀 <b>A new version (v{BOT_VERSION}) is available!</b>\n\nI've been upgraded with new features and improvements.\n\nTo get the latest version, please reply to this message with the command:\n<code>/update</code>"
+            update_message = f"🚀 <b>A new version (v{BOT_VERSION}) is available!</b>\n\nI've been upgraded with new features and improvements.\n\nTo get the latest version, reply to this message with the command:\n<code>/update</code>"
             for chat_id, tracker_data in list(ACTIVE_TRACKERS.items()):
                 try: await application.bot.send_animation(chat_id=chat_id, animation=UPDATE_GIF_URL, caption=update_message, parse_mode=ParseMode.HTML)
                 except Exception as e: logger.error(f"Failed to send update notice to {chat_id}: {e}")
@@ -468,12 +505,12 @@ def main():
     application = Application.builder().token(TOKEN).build()
     
     application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd))
-    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("updatecode", updatecode_cmd))
+    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("deploy", deploy_cmd))
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     application.add_handler(MessageHandler(filters.REPLY, reply_handler))
     
     application.job_queue.run_once(check_for_updates, 5)
-    logger.info("Bot [Final Edition] is running...")
+    logger.info("Bot [Prestige Edition] is running...")
     application.run_polling()
 
 if __name__ == '__main__':
