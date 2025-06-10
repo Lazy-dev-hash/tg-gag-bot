@@ -3,3 +3,5 @@ httpx
 pytz
 flask
 yt-dlp
+google-generativeai
+requests
