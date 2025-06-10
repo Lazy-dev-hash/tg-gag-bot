@@ -24,7 +24,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '9.0.0') # Platinum VIP Edition
+BOT_VERSION = os.environ.get('BOT_VERSION', '8.0.1')
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
@@ -64,10 +64,8 @@ def load_vips():
     filepath = os.path.join(DATA_DIR, "vips.json")
     if os.path.exists(filepath):
         try:
-            with open(filepath, 'r') as f: VIP_USERS = {k: v for k, v in json.load(f).items()}
-        except (json.JSONDecodeError, ValueError):
-            logger.error("Could not decode vips.json. Starting with an empty VIP list.")
-            VIP_USERS = {}
+            with open(filepath, 'r') as f: VIP_USERS = {int(k): v for k, v in json.load(f).items()}
+        except (json.JSONDecodeError, ValueError): logger.error("Could not decode vips.json."); VIP_USERS = {}
 def save_vips():
     filepath = os.path.join(DATA_DIR, "vips.json")
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -251,7 +249,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e: logger.error(f"Failed to send approval notice to admin {admin_id}: {e}")
         return
     if user.id in RESTRICTED_USERS: await update.message.reply_text("⚠️ Your account is restricted. You can refresh stock but cannot start a new tracker. Please contact an admin."); return
-    is_vip = user.id in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(str(user.id), '1970-01-01T00:00:00')) > datetime.now()
+    is_vip = user.id in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(user.id, '1970-01-01T00:00:00')) > datetime.now()
     if is_vip:
         chat_id = user.id
         if chat_id in ACTIVE_TRACKERS: await update.message.reply_text("📡 ⭐ VIP tracking is already active! You will get notifications automatically."); return
@@ -320,7 +318,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             if target_id in BANNED_USERS: status, status_icon = "Banned", "🚫"
             elif target_id in RESTRICTED_USERS: status, status_icon = "Restricted", "⚠️"
             elif target_id in ADMIN_USERS: status, status_icon = "Admin", "👑"
-            if str(target_id) in VIP_USERS and datetime.fromisoformat(VIP_USERS[str(target_id)]) > datetime.now(): status += " (VIP)"
+            if target_id in VIP_USERS and datetime.fromisoformat(VIP_USERS[str(target_id)]) > datetime.now(): status += " (VIP)"
             keyboard = [[InlineKeyboardButton("✅ Unban" if target_id in BANNED_USERS else "🚫 Ban", callback_data=f"admin_user_unban_{target_id}" if target_id in BANNED_USERS else f"admin_user_ban_{target_id}")],[InlineKeyboardButton("✅ Unrestrict" if target_id in RESTRICTED_USERS else "⚠️ Restrict", callback_data=f"admin_user_unrestrict_{target_id}" if target_id in RESTRICTED_USERS else f"admin_user_restrict_{target_id}")],[InlineKeyboardButton("Demote" if target_id in ADMIN_USERS else "👑 Promote", callback_data=f"admin_user_deladmin_{target_id}" if target_id in ADMIN_USERS else f"admin_user_addadmin_{target_id}")],[InlineKeyboardButton("⬅️ Back to Main Menu", callback_data='admin_main')]]
             await query.edit_message_text(f"<b>Managing:</b> {user_info['first_name']}\n<b>ID:</b> <code>{target_id}</code>\n<b>Status:</b> {status_icon} {status}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
             return
@@ -452,11 +450,11 @@ async def extendvip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(context.args) != 2: raise ValueError
         target_id, days = int(context.args[0]), int(context.args[1])
         if target_id not in AUTHORIZED_USERS: await update.message.reply_text("❌ This user must be authorized first."); return
-        current_expiration_str = VIP_USERS.get(str(target_id))
+        current_expiration_str = VIP_USERS.get(target_id)
         current_expiration = datetime.fromisoformat(current_expiration_str) if current_expiration_str else datetime.now()
         if current_expiration < datetime.now(): current_expiration = datetime.now()
         new_expiration = current_expiration + timedelta(days=days)
-        VIP_USERS[str(target_id)] = new_expiration.isoformat(); save_vips()
+        VIP_USERS[target_id] = new_expiration.isoformat(); save_vips()
         await update.message.reply_text(f"✅ VIP status for user <code>{target_id}</code> extended by {days} days. New expiration: {new_expiration.strftime('%B %d, %Y')}", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=target_id, text=f"🎉 Your VIP status has been extended! It now expires on {new_expiration.strftime('%B %d, %Y')}.")
     except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/extendvip [user_id] [days]</code>", parse_mode=ParseMode.HTML)
@@ -468,7 +466,7 @@ async def redeem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = context.args[0]
     if code in VIP_CODES:
         del VIP_CODES[code]
-        expiration_date = datetime.now() + timedelta(days=30); VIP_USERS[str(user.id)] = expiration_date.isoformat(); save_vips()
+        expiration_date = datetime.now() + timedelta(days=30); VIP_USERS[user.id] = expiration_date.isoformat(); save_vips()
         await update.message.reply_text(f"🎉 <b>Congratulations!</b>\n\nYou have successfully redeemed a VIP code. Your VIP status is active until {expiration_date.strftime('%B %d, %Y')}.")
         await log_user_activity(user, "[VIP Activated]", context.bot)
         for admin_id in ADMIN_USERS:
@@ -517,12 +515,13 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id in BANNED_USERS: return
     if user.id not in AUTHORIZED_USERS: await update.message.reply_text("You need to be approved to use this bot. Send /start to begin the approval process."); return
     await log_user_activity(user, "/help", context.bot)
-    is_vip = user.id in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(str(user.id), '1970-01-01T00:00:00')) > datetime.now()
+    is_vip = user.id in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(user.id, '1970-01-01T00:00:00')) > datetime.now()
     guide = f"📘 <b>GAG Stock Alerter Guide</b> (v{BOT_VERSION})\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › " + ("Starts VIP background tracking." if is_vip else "Shows current stock.") + "\n🔄  <b>/refresh</b> › Manually shows current stock.\n📈  <b>/recent</b> › Shows recent items.\n📊  <b>/stats</b> › View your personal bot usage stats.\n💎  <b>/listprized</b> › Shows the prized items list.\n"
     if not is_vip: guide += "⭐  <b>/redeem</b> <code>[code]</code> › Redeem a VIP code.\n"
     if is_vip: guide += "🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles VIP notifications.\n⏹️  <b>/stop</b> › Stops the VIP tracker completely.\n"
     guide += "✨  <b>/update</b> › Restarts your session to the latest bot version.\n\n"
     if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n📢  <b>/broadcast</b> <code>[msg]</code> › Send a message to all users.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n⭐  <b>/getvipcode</b> › Generates a new VIP code.\n⏳  <b>/extendvip</b> <code>[id] [days]</code> › Extends a user's VIP.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/restart</b> › Restarts the bot process.\n"
+    if user.id == BOT_OWNER_ID: guide += "\n<b><u>🔒 Owner Command</u></b>\n<code>/updatecode</code> › Reply to code to update bot."
     await update.message.reply_text(guide, parse_mode=ParseMode.HTML)
 async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -558,8 +557,8 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         approved_date = datetime.fromisoformat(approved_date_str)
         days_since = (datetime.now(pytz.utc) - approved_date).days
         stats_message += f"<b>Member Since:</b> {approved_date.strftime('%B %d, %Y')} ({days_since} days ago)\n"
-    if user.id in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(str(user.id), '1970-01-01T00:00:00')) > datetime.now():
-        vip_exp_date = datetime.fromisoformat(VIP_USERS[str(user.id)])
+    if user.id in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(user.id, '1970-01-01T00:00:00')) > datetime.now():
+        vip_exp_date = datetime.fromisoformat(VIP_USERS[user.id])
         stats_message += f"<b>Status:</b> ⭐ VIP (Expires: {vip_exp_date.strftime('%B %d, %Y')})"
     await update.message.reply_html(stats_message)
 async def check_for_updates(application: Application):
@@ -582,11 +581,8 @@ def main():
     
     application = Application.builder().token(TOKEN).build()
     
-    # User Commands
     application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd)); application.add_handler(CommandHandler("stats", stats_cmd)); application.add_handler(CommandHandler("redeem", redeem_cmd))
-    # Admin Commands
     application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("restart", restart_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd)); application.add_handler(CommandHandler("getvipcode", getvipcode_cmd)); application.add_handler(CommandHandler("extendvip", extendvip_cmd))
-    # Handlers
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     application.add_handler(MessageHandler(filters.REPLY, reply_handler))
     
