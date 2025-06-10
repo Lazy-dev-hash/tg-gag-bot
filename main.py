@@ -26,7 +26,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '11.0.1')
+BOT_VERSION = os.environ.get('BOT_VERSION', '12.0.0') # Diamond Edition
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
@@ -41,7 +41,7 @@ DATA_DIR = "/data"
 
 ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
 AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS = set(), set(), set(), set(), set()
-LAST_KNOWN_VERSION, USER_INFO_CACHE, VIP_USERS, CUSTOM_COMMANDS, VIP_CODES = "", {}, {}, {}, {}
+LAST_KNOWN_VERSION, USER_INFO_CACHE, VIP_USERS, CUSTOM_COMMANDS = "", {}, {}, {}
 
 # --- LOGGING SETUP ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -76,7 +76,7 @@ def load_all_data():
     BANNED_USERS = load_int_set_from_file("banned_users.txt"); RESTRICTED_USERS = load_int_set_from_file("restricted_users.txt")
     PRIZED_ITEMS = load_set_from_file("prized_items.txt") or {"master sprinkler", "beanstalk", "advanced sprinkler", "godly sprinkler", "ember lily"}
     if BOT_OWNER_ID: AUTHORIZED_USERS.add(BOT_OWNER_ID); ADMIN_USERS.add(BOT_OWNER_ID)
-    VIP_USERS = load_json_from_file("vips.json") # Loads with string keys, which is correct for JSON
+    VIP_USERS = load_json_from_file("vips.json")
     CUSTOM_COMMANDS = load_json_from_file("custom_commands.json")
     version_path = os.path.join(DATA_DIR, "version.txt")
     if os.path.exists(version_path):
@@ -263,6 +263,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("📡 ⭐ VIP tracking is already active and up-to-date!")
             return
+        
         filters = [f.strip().lower() for f in " ".join(context.args).split('|') if f.strip()]
         initial_data = await send_full_stock_report(update, context, filters)
         if initial_data:
@@ -281,6 +282,7 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dashboard_url = f"{base_url}/login"
     keyboard = [[InlineKeyboardButton("🌐 Open Dashboard", url=dashboard_url)],[InlineKeyboardButton("👤 Manage Authorized", callback_data='admin_users_0')],[InlineKeyboardButton("⚠️ Manage Restricted", callback_data='admin_restricted_0')],[InlineKeyboardButton("🚫 Manage Banned", callback_data='admin_banned_0')],[InlineKeyboardButton("💎 Prized Items", callback_data='admin_prized')],[InlineKeyboardButton("📊 Bot Stats", callback_data='admin_stats')],[InlineKeyboardButton("📢 Broadcast Message", callback_data='admin_broadcast')],[InlineKeyboardButton("❌ Close", callback_data='admin_close')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
+    
     message_to_use = update.message
     if hasattr(update, 'callback_query') and update.callback_query:
         message_to_use = update.callback_query.message
@@ -298,6 +300,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     action = data[1]
     if action == "main": await admin_cmd(update, context); return
     if action == "close": await query.delete_message(); return
+
     list_map = {"banned": {"title": "🚫 Banned Users", "data": BANNED_USERS},"restricted": {"title": "⚠️ Restricted Users", "data": RESTRICTED_USERS},"users": {"title": "👤 Authorized Users", "data": AUTHORIZED_USERS}}
     if action in list_map:
         page = int(data[2]); users_per_page = 5; config = list_map[action]; user_list = sorted(list(config["data"]))
@@ -440,14 +443,6 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await context.bot.send_message(chat_id=user_id, text=broadcast_message, parse_mode=ParseMode.HTML); sent_count += 1; await asyncio.sleep(0.1)
             except Exception as e: logger.error(f"Failed to send broadcast to {user_id}: {e}")
     await update.message.reply_text(f"✅ Broadcast complete. Message sent to {sent_count} users.")
-async def getvipcode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    admin = update.effective_user
-    if admin.id not in ADMIN_USERS: return
-    await log_user_activity(admin, "/getvipcode", context.bot)
-    code = "VIP-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
-    VIP_CODES[code] = True
-    message = f"✨ <b>New VIP Code Generated</b> ✨\n\nShare this single-use code with a user. They can use <code>/redeem</code> to activate their 30-day VIP status.\n\n<code>{code}</code>\n\n<i>(Click the code to copy it)</i>"
-    await update.message.reply_html(message)
 async def extendvip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
     if admin.id not in ADMIN_USERS: return
@@ -526,7 +521,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_vip: guide += "⭐  <b>/requestvip</b> › Request VIP status from an admin.\n"
     if is_vip: guide += "🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles VIP notifications.\n⏹️  <b>/stop</b> › Stops the VIP tracker completely.\n"
     guide += "✨  <b>/update</b> › Restarts your session to the latest bot version.\n\n"
-    if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n📢  <b>/broadcast</b> <code>[msg]</code> › Send a message to all users.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n⭐  <b>/getvipcode</b> › Generates a new VIP code.\n⏳  <b>/extendvip</b> <code>[id] [days]</code> › Extends a user's VIP.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/restart</b> › Restarts the bot process.\n"
+    if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n📢  <b>/broadcast</b> <code>[msg]</code> › Send a message to all users.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n⭐  <b>/extendvip</b> <code>[id] [days]</code> › Extends a user's VIP.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/restart</b> › Restarts the bot process.\n"
     if user.id == BOT_OWNER_ID: guide += "\n<b><u>🔒 Owner Command</u></b>\n<code>/updatecode</code> › Reply to code to update bot."
     await update.message.reply_text(guide, parse_mode=ParseMode.HTML)
 async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
