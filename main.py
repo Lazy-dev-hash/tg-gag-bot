@@ -26,7 +26,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '12.0.0')
+BOT_VERSION = os.environ.get('BOT_VERSION', '12.0.0') # Diamond Edition
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
@@ -458,40 +458,27 @@ async def extendvip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         current_expiration = datetime.fromisoformat(current_expiration_str) if current_expiration_str else datetime.now()
         if current_expiration < datetime.now(): current_expiration = datetime.now()
         new_expiration = current_expiration + timedelta(days=days)
-        VIP_USERS[str(target_id)] = new_expiration.isoformat(); save_vips()
+        VIP_USERS[str(target_id)] = new_expiration.isoformat(); save_json_to_file("vips.json", VIP_USERS)
         await update.message.reply_text(f"✅ VIP status for user <code>{target_id}</code> extended by {days} days. New expiration: {new_expiration.strftime('%B %d, %Y')}", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=target_id, text=f"🎉 Your VIP status has been extended! It now expires on {new_expiration.strftime('%B %d, %Y')}.")
     except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/extendvip [user_id] [days]</code>", parse_mode=ParseMode.HTML)
-async def addcommand_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def access_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
     if admin.id not in ADMIN_USERS: return
-    await log_user_activity(admin, "/addcommand", context.bot)
-    try:
-        if len(context.args) < 3: raise ValueError
-        name, permission, response = context.args[0].lower(), context.args[1].lower(), " ".join(context.args[2:])
-        if not name.isalnum(): await update.message.reply_text("❌ Command name can only contain letters and numbers."); return
-        if permission not in ["user", "admin", "both"]: await update.message.reply_text("❌ Permission must be 'user', 'admin', or 'both'."); return
-        CUSTOM_COMMANDS[name] = {"response": response, "permission": permission}; save_json_to_file("custom_commands.json", CUSTOM_COMMANDS)
-        await update.message.reply_text(f"✅ Custom command `/{name}` created!\n\nUse /restart for the new command to become active.", parse_mode=ParseMode.HTML)
-    except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/addcommand [name] [permission] [response]</code>", parse_mode=ParseMode.HTML)
-async def delcommand_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    admin = update.effective_user
-    if admin.id not in ADMIN_USERS: return
-    await log_user_activity(admin, "/delcommand", context.bot)
-    try:
-        name = context.args[0].lower()
-        if name in CUSTOM_COMMANDS:
-            del CUSTOM_COMMANDS[name]; save_json_to_file("custom_commands.json", CUSTOM_COMMANDS)
-            await update.message.reply_text(f"🗑️ Custom command `/{name}` deleted.\n\nUse /restart for this change to take effect.", parse_mode=ParseMode.HTML)
-        else: await update.message.reply_text(f"❌ Command `/{name}` not found.")
-    except IndexError: await update.message.reply_text("⚠️ Usage: <code>/delcommand [name]</code>", parse_mode=ParseMode.HTML)
-async def listcommands_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if user.id not in ADMIN_USERS: return
-    await log_user_activity(user, "/listcommands", context.bot)
-    if not CUSTOM_COMMANDS: await update.message.reply_text("There are no custom commands currently set."); return
-    message = "<b>🔧 Custom Commands List</b>\n\n" + "\n".join([f"• <code>/{name}</code> (Permission: {data['permission']})" for name, data in CUSTOM_COMMANDS.items()])
-    await update.message.reply_html(message)
+    await log_user_activity(admin, "/access", context.bot)
+    if len(context.args) != 1:
+        await update.message.reply_text("⚠️ Usage: <code>/access [ticket_code]</code>", parse_mode=ParseMode.HTML); return
+    ticket_code = context.args[0]
+    if ticket_code in VIP_REQUESTS:
+        target_id = VIP_REQUESTS[ticket_code]
+        del VIP_REQUESTS[ticket_code]; save_json_to_file("vip_requests.json", VIP_REQUESTS)
+        expiration_date = datetime.now() + timedelta(days=30); VIP_USERS[str(target_id)] = expiration_date.isoformat(); save_vips()
+        user_info = USER_INFO_CACHE.get(str(target_id), {'first_name': f'User {target_id}'})
+        await update.message.reply_text(f"✅ <b>VIP Access Granted!</b>\n\nUser {user_info['first_name']} (<code>{target_id}</code>) is now a VIP until {expiration_date.strftime('%B %d, %Y')}.", parse_mode=ParseMode.HTML)
+        await context.bot.send_message(chat_id=target_id, text=f"🎉 <b>Congratulations!</b>\n\nYour VIP access has been granted and is active until {expiration_date.strftime('%B %d, %Y')}.\n\nUse /start to activate VIP tracking!")
+        await log_user_activity(admin, f"[VIP Granted for {target_id}]", context.bot)
+    else:
+        await update.message.reply_text("❌ Invalid or expired VIP ticket code.")
 
 # --- USER COMMANDS & REPLY HANDLER ---
 async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -540,7 +527,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_vip: guide += "🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles VIP notifications.\n⏹️  <b>/stop</b> › Stops the VIP tracker completely.\n"
     guide += "✨  <b>/update</b> › Restarts your session to the latest bot version.\n\n"
     if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n📢  <b>/broadcast</b> <code>[msg]</code> › Send a message to all users.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n🎟️  <b>/access</b> <code>[ticket]</code> › Grants VIP using a ticket code.\n⏳  <b>/extendvip</b> <code>[id] [days]</code> › Extends a user's VIP.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/restart</b> › Restarts the bot process.\n"
-    if user.id == BOT_OWNER_ID: guide += "\n<b><u>🔒 Owner Command</u></b>\n<code>/updatecode</code> › Reply to code to update bot."
     await update.message.reply_text(guide, parse_mode=ParseMode.HTML)
 async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -580,6 +566,18 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         vip_exp_date = datetime.fromisoformat(VIP_USERS[str(user.id)])
         stats_message += f"<b>Status:</b> ⭐ VIP (Expires: {vip_exp_date.strftime('%B %d, %Y')})"
     await update.message.reply_html(stats_message)
+async def check_for_updates(application: Application):
+    global LAST_KNOWN_VERSION
+    if BOT_VERSION != LAST_KNOWN_VERSION:
+        logger.info(f"Version change detected! New: {BOT_VERSION}, Old: {LAST_KNOWN_VERSION}")
+        if LAST_KNOWN_VERSION != "":
+            update_message = f"🚀 <b>A new version (v{BOT_VERSION}) is available!</b>\n\nI've been upgraded with new features and improvements.\n\nTo get the latest version, you can use the /update command."
+            for chat_id, tracker_data in list(ACTIVE_TRACKERS.items()):
+                try: await application.bot.send_animation(chat_id=chat_id, animation=UPDATE_GIF_URL, caption=update_message, parse_mode=ParseMode.HTML)
+                except Exception as e: logger.error(f"Failed to send update notice to {chat_id}: {e}")
+        version_filepath = os.path.join(DATA_DIR, "version.txt")
+        with open(version_filepath, "w") as f: f.write(BOT_VERSION)
+        LAST_KNOWN_VERSION = BOT_VERSION
 async def send_welcome_video(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     processing_msg = None
     try:
@@ -607,37 +605,15 @@ async def vip_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     user_info = USER_INFO_CACHE.get(str(target_id), {'first_name': f'User {target_id}'})
     if action == "approve":
         expiration_date = datetime.now() + timedelta(days=30)
-        VIP_USERS[str(target_id)] = expiration_date.isoformat(); save_vips()
+        VIP_USERS[str(target_id)] = expiration_date.isoformat(); save_json_to_file("vips.json", VIP_USERS)
         await query.edit_message_text(f"✅ VIP status for {user_info['first_name']} (<code>{target_id}</code>) has been approved.", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=target_id, text=f"🎉 <b>Congratulations!</b>\n\nYour request has been approved. You now have VIP status until {expiration_date.strftime('%B %d, %Y')}.\n\nUse /start to activate VIP tracking!")
     elif action == "decline":
         await query.edit_message_text(f"❌ VIP request for {user_info['first_name']} (<code>{target_id}</code>) has been declined.", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=target_id, text="Your request for VIP status has been declined by an admin.")
-async def requestvip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
-    await log_user_activity(user, "/requestvip", context.bot)
-    admin_msg = f"⭐ <b>VIP Request</b>\n\n<b>User:</b> {user.full_name} (<code>{user.id}</code>) is requesting VIP status."
-    keyboard = [[InlineKeyboardButton("✅ Approve VIP (30 days)", callback_data=f"vip_approve_{user.id}"), InlineKeyboardButton("❌ Decline", callback_data=f"vip_decline_{user.id}")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    for admin_id in ADMIN_USERS:
-        try: await context.bot.send_message(chat_id=admin_id, text=admin_msg, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
-        except Exception as e: logger.error(f"Failed to send VIP request notice to admin {admin_id}: {e}")
-    await update.message.reply_text("✅ Your request for VIP status has been sent to the admins. You will be notified if it's approved.")
-async def check_for_updates(application: Application):
-    global LAST_KNOWN_VERSION
-    if BOT_VERSION != LAST_KNOWN_VERSION:
-        logger.info(f"Version change detected! New: {BOT_VERSION}, Old: {LAST_KNOWN_VERSION}")
-        if LAST_KNOWN_VERSION != "":
-            update_message = f"🚀 <b>A new version (v{BOT_VERSION}) is available!</b>\n\nI've been upgraded with new features and improvements.\n\nTo get the latest version, you can use the /update command."
-            for chat_id, tracker_data in list(ACTIVE_TRACKERS.items()):
-                try: await application.bot.send_animation(chat_id=chat_id, animation=UPDATE_GIF_URL, caption=update_message, parse_mode=ParseMode.HTML)
-                except Exception as e: logger.error(f"Failed to send update notice to {chat_id}: {e}")
-        version_filepath = os.path.join(DATA_DIR, "version.txt")
-        with open(version_filepath, "w") as f: f.write(BOT_VERSION)
-        LAST_KNOWN_VERSION = BOT_VERSION
 
 def main():
+    if not TOKEN or not BOT_OWNER_ID: logger.critical("Required environment variables are not set!"); return
     load_all_data()
     Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': int(os.environ.get('PORT', 8080))}, daemon=True).start()
     
@@ -646,14 +622,14 @@ def main():
     # User Commands
     application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd)); application.add_handler(CommandHandler("stats", stats_cmd)); application.add_handler(CommandHandler("requestvip", requestvip_cmd))
     # Admin Commands
-    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("restart", restart_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd)); application.add_handler(CommandHandler("extendvip", extendvip_cmd))
+    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("restart", restart_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd)); application.add_handler(CommandHandler("extendvip", extendvip_cmd)); application.add_handler(CommandHandler("access", access_cmd))
     # Handlers
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     application.add_handler(CallbackQueryHandler(vip_callback_handler, pattern='^vip_'))
     application.add_handler(MessageHandler(filters.REPLY, reply_handler))
     
     application.job_queue.run_once(check_for_updates, 5)
-    logger.info("Bot [Grand Finale Edition] is running...")
+    logger.info("Bot [Diamond Edition] is running...")
     application.run_polling()
 
 if __name__ == '__main__':
