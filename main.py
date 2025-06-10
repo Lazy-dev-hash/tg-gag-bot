@@ -24,7 +24,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '8.0.2') # Final Bugfix
+BOT_VERSION = os.environ.get('BOT_VERSION', '9.0.0') # Platinum VIP Edition
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
@@ -34,6 +34,7 @@ API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
 TRACKING_INTERVAL_SECONDS = 45
 MULTOMUSIC_URL = "https://www.youtube.com/watch?v=sPma_hV4_sU"
 UPDATE_GIF_URL = "https://i.pinimg.com/originals/e5/22/07/e52207b837755b763b65b6302409feda.gif"
+WELCOME_VIDEO_URL = "https://youtu.be/VaSazPeDOTM"
 DATA_DIR = "/data"
 
 ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
@@ -63,8 +64,10 @@ def load_vips():
     filepath = os.path.join(DATA_DIR, "vips.json")
     if os.path.exists(filepath):
         try:
-            with open(filepath, 'r') as f: VIP_USERS = {int(k): v for k, v in json.load(f).items()}
-        except (json.JSONDecodeError, ValueError): logger.error("Could not decode vips.json."); VIP_USERS = {}
+            with open(filepath, 'r') as f: VIP_USERS = {k: v for k, v in json.load(f).items()}
+        except (json.JSONDecodeError, ValueError):
+            logger.error("Could not decode vips.json. Starting with an empty VIP list.")
+            VIP_USERS = {}
 def save_vips():
     filepath = os.path.join(DATA_DIR, "vips.json")
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -317,7 +320,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             if target_id in BANNED_USERS: status, status_icon = "Banned", "🚫"
             elif target_id in RESTRICTED_USERS: status, status_icon = "Restricted", "⚠️"
             elif target_id in ADMIN_USERS: status, status_icon = "Admin", "👑"
-            if target_id in VIP_USERS and datetime.fromisoformat(VIP_USERS[str(target_id)]) > datetime.now(): status += " (VIP)"
+            if str(target_id) in VIP_USERS and datetime.fromisoformat(VIP_USERS[str(target_id)]) > datetime.now(): status += " (VIP)"
             keyboard = [[InlineKeyboardButton("✅ Unban" if target_id in BANNED_USERS else "🚫 Ban", callback_data=f"admin_user_unban_{target_id}" if target_id in BANNED_USERS else f"admin_user_ban_{target_id}")],[InlineKeyboardButton("✅ Unrestrict" if target_id in RESTRICTED_USERS else "⚠️ Restrict", callback_data=f"admin_user_unrestrict_{target_id}" if target_id in RESTRICTED_USERS else f"admin_user_restrict_{target_id}")],[InlineKeyboardButton("Demote" if target_id in ADMIN_USERS else "👑 Promote", callback_data=f"admin_user_deladmin_{target_id}" if target_id in ADMIN_USERS else f"admin_user_addadmin_{target_id}")],[InlineKeyboardButton("⬅️ Back to Main Menu", callback_data='admin_main')]]
             await query.edit_message_text(f"<b>Managing:</b> {user_info['first_name']}\n<b>ID:</b> <code>{target_id}</code>\n<b>Status:</b> {status_icon} {status}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
             return
@@ -453,10 +456,25 @@ async def extendvip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         current_expiration = datetime.fromisoformat(current_expiration_str) if current_expiration_str else datetime.now()
         if current_expiration < datetime.now(): current_expiration = datetime.now()
         new_expiration = current_expiration + timedelta(days=days)
-        VIP_USERS[target_id] = new_expiration.isoformat(); save_vips()
+        VIP_USERS[str(target_id)] = new_expiration.isoformat(); save_vips()
         await update.message.reply_text(f"✅ VIP status for user <code>{target_id}</code> extended by {days} days. New expiration: {new_expiration.strftime('%B %d, %Y')}", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=target_id, text=f"🎉 Your VIP status has been extended! It now expires on {new_expiration.strftime('%B %d, %Y')}.")
     except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/extendvip [user_id] [days]</code>", parse_mode=ParseMode.HTML)
+async def redeem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    await log_user_activity(user, "/redeem", context.bot)
+    if len(context.args) != 1: await update.message.reply_text("Usage: <code>/redeem [vip_code]</code>", parse_mode=ParseMode.HTML); return
+    code = context.args[0]
+    if code in VIP_CODES:
+        del VIP_CODES[code]
+        expiration_date = datetime.now() + timedelta(days=30); VIP_USERS[str(user.id)] = expiration_date.isoformat(); save_vips()
+        await update.message.reply_text(f"🎉 <b>Congratulations!</b>\n\nYou have successfully redeemed a VIP code. Your VIP status is active until {expiration_date.strftime('%B %d, %Y')}.")
+        await log_user_activity(user, "[VIP Activated]", context.bot)
+        for admin_id in ADMIN_USERS:
+            try: await context.bot.send_message(chat_id=admin_id, text=f"⭐ <b>VIP Status Activated</b>\n\n<b>User:</b> {user.first_name} (<code>{user.id}</code>)\n<b>Expires:</b> {expiration_date.strftime('%B %d, %Y')}", parse_mode=ParseMode.HTML)
+            except Exception as e: logger.error(f"Failed to send VIP notice to admin {admin_id}: {e}")
+    else: await update.message.reply_text("❌ Invalid or already used VIP code.")
 
 # --- USER COMMANDS & REPLY HANDLER ---
 async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -544,21 +562,6 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         vip_exp_date = datetime.fromisoformat(VIP_USERS[str(user.id)])
         stats_message += f"<b>Status:</b> ⭐ VIP (Expires: {vip_exp_date.strftime('%B %d, %Y')})"
     await update.message.reply_html(stats_message)
-async def redeem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
-    await log_user_activity(user, "/redeem", context.bot)
-    if len(context.args) != 1: await update.message.reply_text("Usage: <code>/redeem [vip_code]</code>", parse_mode=ParseMode.HTML); return
-    code = context.args[0]
-    if code in VIP_CODES:
-        del VIP_CODES[code]
-        expiration_date = datetime.now() + timedelta(days=30); VIP_USERS[user.id] = expiration_date.isoformat(); save_vips()
-        await update.message.reply_text(f"🎉 <b>Congratulations!</b>\n\nYou have successfully redeemed a VIP code. Your VIP status is active until {expiration_date.strftime('%B %d, %Y')}.")
-        await log_user_activity(user, "[VIP Activated]", context.bot)
-        for admin_id in ADMIN_USERS:
-            try: await context.bot.send_message(chat_id=admin_id, text=f"⭐ <b>VIP Status Activated</b>\n\n<b>User:</b> {user.first_name} (<code>{user.id}</code>)\n<b>Expires:</b> {expiration_date.strftime('%B %d, %Y')}", parse_mode=ParseMode.HTML)
-            except Exception as e: logger.error(f"Failed to send VIP notice to admin {admin_id}: {e}")
-    else: await update.message.reply_text("❌ Invalid or already used VIP code.")
 async def check_for_updates(application: Application):
     global LAST_KNOWN_VERSION
     if BOT_VERSION != LAST_KNOWN_VERSION:
