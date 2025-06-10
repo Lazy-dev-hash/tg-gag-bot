@@ -24,7 +24,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '4.0.1')
+BOT_VERSION = os.environ.get('BOT_VERSION', '4.0.1') # Bugfix release
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
@@ -405,9 +405,14 @@ async def enhance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     processing_msg = await update.message.reply_text("✨ Enhancing your image...")
     try:
         file = await context.bot.get_file(update.message.reply_to_message.photo[-1].file_id)
-        async with httpx.AsyncClient() as client: photo_data = await client.get(file.file_path)
-        r = requests.post('https://clipdrop-api.co/image-upscaling/v1/upscale', files={'image_file': ('image.jpg', photo_data.content, 'image/jpeg')}, headers={'x-api-key': CLIPDROP_API_KEY}, data={'target_width': 2048, 'target_height': 2048})
-        if r.ok: await context.bot.send_photo(chat_id=user.id, photo=r.content, caption="Here is your enhanced image!")
+        async with httpx.AsyncClient() as client:
+            photo_data = await client.get(file.file_path)
+            r = await client.post('https://clipdrop-api.co/image-upscaling/v1/upscale',
+                files={'image_file': ('image.jpg', photo_data.content, 'image/jpeg')},
+                headers={'x-api-key': CLIPDROP_API_KEY},
+                data={'target_width': 2048, 'target_height': 2048},
+                timeout=60)
+        if r.status_code == 200: await context.bot.send_photo(chat_id=user.id, photo=r.content, caption="Here is your enhanced image!")
         else: r.raise_for_status()
         await processing_msg.delete()
     except Exception as e: logger.error(f"Enhance command error: {e}"); await processing_msg.edit_text("Sorry, something went wrong.")
@@ -420,9 +425,12 @@ async def removebg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     processing_msg = await update.message.reply_text("🎨 Removing background...")
     try:
         file = await context.bot.get_file(update.message.reply_to_message.photo[-1].file_id)
-        async with httpx.AsyncClient() as client: photo_data = await client.get(file.file_path)
-        r = requests.post('https://clipdrop-api.co/remove-background/v1', files={'image_file': ('image.jpg', photo_data.content, 'image/jpeg')}, headers={'x-api-key': CLIPDROP_API_KEY})
-        if r.ok: await context.bot.send_document(chat_id=user.id, document=r.content, filename="removed_bg.png", caption="Background removed!")
+        async with httpx.AsyncClient() as client:
+            photo_data = await client.get(file.file_path)
+            r = await client.post('https://clipdrop-api.co/remove-background/v1',
+                files={'image_file': ('image.jpg', photo_data.content, 'image/jpeg')},
+                headers={'x-api-key': CLIPDROP_API_KEY}, timeout=60)
+        if r.status_code == 200: await context.bot.send_document(chat_id=user.id, document=r.content, filename="removed_bg.png", caption="Background removed!")
         else: r.raise_for_status()
         await processing_msg.delete()
     except Exception as e: logger.error(f"RemoveBG command error: {e}"); await processing_msg.edit_text("Sorry, something went wrong.")
@@ -481,7 +489,6 @@ async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await context.bot.send_message(chat_id=admin_id, text=reply_text, parse_mode=ParseMode.HTML)
             except Exception as e: logger.error(f"Failed to forward reply to admin {admin_id}: {e}")
         await update.message.reply_text("✅ Your reply has been sent to the admins.")
-
 async def check_for_updates(application: Application):
     global LAST_KNOWN_VERSION
     if BOT_VERSION != LAST_KNOWN_VERSION:
