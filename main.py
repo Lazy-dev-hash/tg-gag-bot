@@ -23,7 +23,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '7.0.0') # Prestige Edition
+BOT_VERSION = os.environ.get('BOT_VERSION', '7.0.0')
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
@@ -33,7 +33,7 @@ API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
 TRACKING_INTERVAL_SECONDS = 45
 MULTOMUSIC_URL = "https://www.youtube.com/watch?v=sPma_hV4_sU"
 UPDATE_GIF_URL = "https://i.pinimg.com/originals/e5/22/07/e52207b837755b763b65b6302409feda.gif"
-DATA_DIR = "/data"
+DATA_DIR = "/data" # The mount path of our Render Disk
 
 ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
 AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS = set(), set(), set(), set(), set()
@@ -43,7 +43,7 @@ LAST_KNOWN_VERSION, USER_INFO_CACHE = "", {}
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- PERSISTENT STORAGE ---
+# --- PERSISTENT STORAGE (Now uses DATA_DIR) ---
 def load_set_from_file(filename):
     filepath = os.path.join(DATA_DIR, filename)
     if not os.path.exists(filepath): return set()
@@ -256,16 +256,16 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🌐 Open Dashboard", url=dashboard_url)],[InlineKeyboardButton("👤 Manage Authorized", callback_data='admin_users_0')],[InlineKeyboardButton("⚠️ Manage Restricted", callback_data='admin_restricted_0')],[InlineKeyboardButton("🚫 Manage Banned", callback_data='admin_banned_0')],[InlineKeyboardButton("💎 Prized Items", callback_data='admin_prized')],[InlineKeyboardButton("📊 Bot Stats", callback_data='admin_stats')],[InlineKeyboardButton("📢 Broadcast Message", callback_data='admin_broadcast')],[InlineKeyboardButton("❌ Close", callback_data='admin_close')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    message_to_edit = update.message
+    message_to_use = update.message
     if hasattr(update, 'callback_query') and update.callback_query:
-        message_to_edit = update.callback_query.message
+        message_to_use = update.callback_query.message
         try:
-            await message_to_edit.edit_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+            await message_to_use.edit_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup, parse_mode=ParseMode.HTML)
         except Exception as e:
             logger.warning(f"Could not edit message for admin panel, sending new one. Error: {e}")
             await context.bot.send_message(chat_id=user.id, text=f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     else:
-        await message_to_edit.reply_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup)
+        await message_to_use.reply_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup)
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
     admin_id = query.from_user.id
@@ -433,7 +433,7 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(chat_id=user_id, text=broadcast_message, parse_mode=ParseMode.HTML)
                 sent_count += 1
-                await asyncio.sleep(0.1) # Small delay to avoid hitting rate limits
+                await asyncio.sleep(0.1)
             except Exception as e:
                 logger.error(f"Failed to send broadcast to {user_id}: {e}")
     
@@ -545,8 +545,11 @@ def main():
     
     application = Application.builder().token(TOKEN).build()
     
+    # User Commands
     application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd)); application.add_handler(CommandHandler("stats", stats_cmd))
+    # Admin Commands
     application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("deploy", deploy_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd))
+    # Handlers
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     application.add_handler(MessageHandler(filters.REPLY, reply_handler))
     
