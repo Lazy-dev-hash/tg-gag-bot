@@ -25,7 +25,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN') # Token for the main "Hub" bot
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '13.0.3') # Final Startup Fix
+BOT_VERSION = os.environ.get('BOT_VERSION', '13.0.4') # Final Bot Factory Fix
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 BOT_CREATOR_NAME = os.environ.get('BOT_CREATOR_NAME', 'Sunnel')
 
@@ -791,28 +791,34 @@ def main():
             logger.error(f"Failed to register child bot @{bot_data['username']} with token {bot_token[:8]}...: {e}")
 
     # --- CORRECTED COMMAND HANDLER REGISTRATION ---
-    # The string in the list MUST match the function name prefix (with underscores).
+    # The string in the list MUST match the function name (with underscores).
     # The CommandHandler will automatically create the user-facing command without underscores.
-    user_commands = [
-        "start", "stop", "refresh", "next", "register_bot", "help", "mute", 
-        "unmute", "recent", "listprized", "update", "stats", "requestvip"
-    ]
-    user_handlers = [CommandHandler(cmd.replace('_', ''), globals()[f"{cmd}_cmd"]) for cmd in user_commands]
-    application.add_handlers(user_handlers)
-    
-    admin_commands = [
-        "admin", "approve_bot", "uptime", "approve", "add_admin", "msg", 
-        "adminlist", "addprized", "delprized", "restart", "broadcast", 
-        "extendvip", "access", "addcommand", "delcommand", "listcommands"
-    ]
-    admin_handlers = [CommandHandler(cmd.replace('_', ''), globals()[f"{cmd}_cmd"]) for cmd in admin_commands]
-    application.add_handlers(admin_handlers)
+    user_handlers = {
+        "start": start_cmd, "stop": stop_cmd, "refresh": refresh_cmd, "next": next_cmd,
+        "registerbot": register_bot_cmd, "help": help_cmd, "mute": mute_cmd, "unmute": unmute_cmd,
+        "recent": recent_cmd, "listprized": listprized_cmd, "update": update_cmd,
+        "stats": stats_cmd, "requestvip": requestvip_cmd
+    }
+    for cmd_name, func in user_handlers.items():
+        application.add_handler(CommandHandler(cmd_name, func))
+
+    admin_handlers = {
+        "admin": admin_cmd, "approvebot": approve_bot_cmd, "uptime": uptime_cmd,
+        "approve": approve_cmd, "addadmin": add_admin_cmd, "msg": msg_cmd,
+        "adminlist": adminlist_cmd, "addprized": addprized_cmd, "delprized": delprized_cmd,
+        "restart": restart_cmd, "broadcast": broadcast_cmd, "extendvip": extendvip_cmd,
+        "access": access_cmd, "addcommand": addcommand_cmd, "delcommand": delcommand_cmd,
+        "listcommands": listcommands_cmd
+    }
+    for cmd_name, func in admin_handlers.items():
+        application.add_handler(CommandHandler(cmd_name, func))
     
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     application.add_handler(MessageHandler(filters.REPLY, reply_handler))
     
     application.job_queue.run_once(check_for_updates, 5)
-    logger.info(f"Bot Factory [v{BOT_VERSION}] is running with {len(application.bots)} bot(s)...")
+    # The correct way to get the number of bots is from application.bot_data
+    logger.info(f"Bot Factory [v{BOT_VERSION}] is running with {len(application.bot_data)} bot(s)...")
     application.run_polling()
 
 if __name__ == '__main__':
