@@ -25,7 +25,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN') # Token for the main "Hub" bot
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '13.0.5') # Admin-Controlled Updates & Final Stability
+BOT_VERSION = os.environ.get('BOT_VERSION', '13.0.5') # Deployment Fix
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 BOT_CREATOR_NAME = os.environ.get('BOT_CREATOR_NAME', 'Sunnel')
 
@@ -252,6 +252,7 @@ def dashboard_route():
     for user_id, tracker_data in ACTIVE_TRACKERS.items():
         user_info = USER_INFO_CACHE.get(str(user_id))
         if user_info:
+            # We use the main bot's token for dashboard avatars
             avatar_url = f"https://api.telegram.org/file/bot{TOKEN}/{user_info['avatar_path']}" if user_info.get('avatar_path') else "https://i.imgur.com/jpfrJd3.png"
             active_users.append({'first_name': user_info['first_name'], 'username': user_info['username'], 'avatar_url': avatar_url, 'is_muted': tracker_data['is_muted']})
     for log in USER_ACTIVITY:
@@ -299,7 +300,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         admin_msg = f"👤 <b>New User Request</b>\n\n<b>Name:</b> {user.first_name}\n<b>User ID:</b> <code>{user.id}</code>\n\nTo approve, use: <code>/approve {user.id}</code>"
         await update.message.reply_html(user_msg)
         for admin_id in ADMIN_USERS:
-            try: await context.bot.send_message(chat_id=admin_id, text=admin_msg, parse_mode=ParseMode.HTML)
+            try: await context.application.bot.send_message(chat_id=admin_id, text=admin_msg, parse_mode=ParseMode.HTML)
             except Exception as e: logger.error(f"Failed to send approval notice to admin {admin_id}: {e}")
         return
     if user.id in RESTRICTED_USERS: await update.message.reply_text("⚠️ Your account is restricted. You can refresh stock but cannot start a new tracker. Please contact an admin."); return
@@ -309,7 +310,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if chat_id in ACTIVE_TRACKERS:
             tracker_version = ACTIVE_TRACKERS[chat_id].get('version', '0.0.0')
             if tracker_version != BOT_VERSION:
-                await update.message.reply_html("🚀 <b>A new version is available!</b>\n\nAn admin can update your session for you.")
+                await update.message.reply_html("🚀 <b>A new version is available!</b>\n\nPlease ask an admin to update your session.")
             else:
                 await update.message.reply_text("📡 ⭐ VIP tracking is already active and up-to-date!")
             return
@@ -363,7 +364,7 @@ async def register_bot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_msg = f"🤖 <b>New Bot Registration Request</b>\n\n<b>User:</b> {user.full_name} (<code>{user.id}</code>)\n<b>Requested Bot Name:</b> {bot_name}\n<b>Bot Username:</b> @{bot_username}\n\nTo approve, use: <code>/approvebot {request_code}</code>"
     await update.message.reply_html(user_msg)
     for admin_id in ADMIN_USERS:
-        try: await context.bot.send_message(chat_id=admin_id, text=admin_msg, parse_mode=ParseMode.HTML)
+        try: await context.application.bot.send_message(chat_id=admin_id, text=admin_msg, parse_mode=ParseMode.HTML)
         except Exception as e: logger.error(f"Failed to send bot reg notice to admin {admin_id}: {e}")
 
 # --- ADMIN COMMANDS ---
@@ -386,7 +387,7 @@ async def approve_bot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_json_to_file("bot_registrations.json", BOT_REGISTRATION_REQUESTS)
     await update.message.reply_html(f"✅ <b>Success!</b>\n\nYou have approved @{bot_username}.\n\n<b>IMPORTANT:</b> A <code>/restart</code> is required to activate this new bot.")
     success_message = f"🎉 <b>Bot Approved!</b> 🎉\n\nCongratulations! Your bot '<b>{bot_name}</b>' has been approved by an admin.\n\n➡️ <b>Your bot's link:</b> https://t.me/{bot_username}\n\nIt will become active after the next system restart."
-    try: await context.bot.send_message(chat_id=user_id, text=success_message, parse_mode=ParseMode.HTML)
+    try: await context.application.bot.send_message(chat_id=user_id, text=success_message, parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"Failed to send bot approval success message to {user_id}: {e}")
         await update.message.reply_html(f"⚠️ Could not notify the user. Please message them manually.")
@@ -493,7 +494,7 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await log_user_activity(target_user, "[Approved]", context.bot)
         except Exception as e: logger.error(f"Could not get chat for newly approved user {target_id}: {e}")
         await update.message.reply_text(f"✅ User <code>{target_id}</code> has been authorized!", parse_mode=ParseMode.HTML)
-        await context.bot.send_message(chat_id=target_id, text="🎉 <b>You have been approved!</b>\n\nYou can now use the bot's commands. See /help for details.")
+        await context.application.bot.send_message(chat_id=target_id, text="🎉 <b>You have been approved!</b>\n\nYou can now use the bot's commands. See /help for details.")
         await send_welcome_video(context, target_id)
     except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/approve [user_id]</code>", parse_mode=ParseMode.HTML)
     except Exception as e: await update.message.reply_text(f"❌ Error approving user: {e}")
@@ -619,7 +620,7 @@ async def requestvip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_msg = f"⭐ <b>New VIP Request Ticket</b>\n\n<b>User:</b> {user.full_name} (<code>{user.id}</code>)\n<b>Ticket Code:</b> <code>{ticket_code}</code>\n\nTo approve, use: <code>/access {ticket_code}</code>"
     await update.message.reply_html(user_msg)
     for admin_id in ADMIN_USERS:
-        try: await context.bot.send_message(chat_id=admin_id, text=admin_msg, parse_mode=ParseMode.HTML)
+        try: await context.application.bot.send_message(chat_id=admin_id, text=admin_msg, parse_mode=ParseMode.HTML)
         except Exception as e: logger.error(f"Failed to send VIP request notice to admin {admin_id}: {e}")
 async def addcommand_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
@@ -706,7 +707,7 @@ async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await log_user_activity(user, "[Reply to Admin]", context.bot)
         reply_text = f"🗣️ <b>New Reply from User:</b>\n\n<b>From:</b> {user.first_name} (<code>{user.id}</code>)\n<b>Message:</b> <i>{update.message.text}</i>\n\nTo reply, use <code>/msg {user.id} [your message]</code>"
         for admin_id in ADMIN_USERS:
-            try: await context.bot.send_message(chat_id=admin_id, text=reply_text, parse_mode=ParseMode.HTML)
+            try: await context.application.bot.send_message(chat_id=admin_id, text=reply_text, parse_mode=ParseMode.HTML)
             except Exception as e: logger.error(f"Failed to forward reply to admin {admin_id}: {e}")
         await update.message.reply_text("✅ Your reply has been sent to the admins.")
 async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -728,26 +729,23 @@ async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_html(f"✅ User <code>{target_id}</code> is already running the latest version (v{BOT_VERSION}).")
         return
 
-    # Cancel old task and restart the session
     tracker_info['task'].cancel()
-    await context.bot.send_message(chat_id=target_id, text="⚙️ An admin is updating your session to the latest version...")
+    await context.application.bot.send_message(chat_id=target_id, text="⚙️ An admin is updating your session to the latest version...")
     
-    # Re-create the necessary objects to call start_cmd for the target user
-    # This is a bit of a workaround to simulate the user running /start
     target_user_info = USER_INFO_CACHE.get(str(target_id))
     if not target_user_info:
         await update.message.reply_html(f"❌ Could not find user info for <code>{target_id}</code> to restart their session.")
         return
 
-    # We create a mock update object
     mock_user = User(id=target_id, first_name=target_user_info.get("first_name", "User"), is_bot=False)
     mock_chat = type('MockChat', (), {'id': target_id, 'type': 'private'})()
-    mock_message = type('MockMessage', (), {'from_user': mock_user, 'chat': mock_chat})()
+    mock_message = type('MockMessage', (), {'from_user': mock_user, 'chat': mock_chat, 'reply_text': start_cmd, 'reply_html': start_cmd}) # Mock reply methods
     mock_update = type('MockUpdate', (), {'effective_user': mock_user, 'message': mock_message, 'effective_chat': mock_chat})()
     
-    # We need to find the right bot instance to pass to start_cmd
-    # Since all bots share the same handlers, any bot instance will do, but lets use the one from the admin's command
-    await start_cmd(mock_update, ContextTypes.DEFAULT_TYPE(application=context.application, chat_id=target_id, user_id=target_id))
+    mock_context = ContextTypes.DEFAULT_TYPE(application=context.application, chat_id=target_id, user_id=target_id)
+    mock_context.args = []
+
+    await start_cmd(mock_update, mock_context)
     await update.message.reply_html(f"✅ Successfully initiated update for user <code>{target_id}</code>.")
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -770,7 +768,8 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     stats_message += status_line
     await update.message.reply_html(stats_message)
-async def check_for_updates(application: Application):
+async def check_for_updates(context: ContextTypes.DEFAULT_TYPE):
+    app = context.job.data
     global LAST_KNOWN_VERSION
     if BOT_VERSION != LAST_KNOWN_VERSION:
         logger.info(f"Version change detected! New: {BOT_VERSION}, Old: {LAST_KNOWN_VERSION}")
@@ -778,7 +777,7 @@ async def check_for_updates(application: Application):
             update_message = f"🚀 <b>A new version (v{BOT_VERSION}) is available!</b>\n\nPlease ask an admin to update your session to get the latest features and improvements."
             for chat_id, tracker_data in list(ACTIVE_TRACKERS.items()):
                 if tracker_data.get('version') != BOT_VERSION:
-                    try: await application.bot.send_animation(chat_id=chat_id, animation=UPDATE_GIF_URL, caption=update_message, parse_mode=ParseMode.HTML)
+                    try: await app.bot.send_animation(chat_id=chat_id, animation=UPDATE_GIF_URL, caption=update_message, parse_mode=ParseMode.HTML)
                     except Exception as e: logger.error(f"Failed to send update notice to {chat_id}: {e}")
         version_filepath = os.path.join(DATA_DIR, "version.txt")
         with open(version_filepath, "w") as f: f.write(BOT_VERSION)
@@ -803,71 +802,63 @@ async def send_welcome_video(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         if 'filename' in locals() and os.path.exists(filename): os.remove(filename)
 
 def register_handlers(app: Application):
-    # This function registers all handlers to a given application instance
-    user_handlers = {
+    handlers = {
         "start": start_cmd, "stop": stop_cmd, "refresh": refresh_cmd, "next": next_cmd,
         "registerbot": register_bot_cmd, "help": help_cmd, "mute": mute_cmd, "unmute": unmute_cmd,
-        "recent": recent_cmd, "listprized": listprized_cmd, "stats": stats_cmd, "requestvip": requestvip_cmd
-    }
-    for cmd_name, func in user_handlers.items():
-        app.add_handler(CommandHandler(cmd_name, func))
-
-    admin_handlers = {
-        "admin": admin_cmd, "approvebot": approve_bot_cmd, "uptime": uptime_cmd, "update": update_cmd,
+        "recent": recent_cmd, "listprized": listprized_cmd, "update": update_cmd,
+        "stats": stats_cmd, "requestvip": requestvip_cmd,
+        "admin": admin_cmd, "approvebot": approve_bot_cmd, "uptime": uptime_cmd,
         "approve": approve_cmd, "addadmin": add_admin_cmd, "msg": msg_cmd,
         "adminlist": adminlist_cmd, "addprized": addprized_cmd, "delprized": delprized_cmd,
         "restart": restart_cmd, "broadcast": broadcast_cmd, "extendvip": extendvip_cmd,
         "access": access_cmd, "addcommand": addcommand_cmd, "delcommand": delcommand_cmd,
         "listcommands": listcommands_cmd
     }
-    for cmd_name, func in admin_handlers.items():
+    for cmd_name, func in handlers.items():
         app.add_handler(CommandHandler(cmd_name, func))
     
     app.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     app.add_handler(MessageHandler(filters.REPLY, reply_handler))
     app.job_queue.run_once(check_for_updates, 15, data=app)
 
-async def run_bot(app: Application):
-    """Starts a single bot instance."""
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
+async def run_bot_instance(token: str):
+    """Initializes and runs a single bot application."""
+    try:
+        application = Application.builder().token(token).build()
+        register_handlers(application)
+        await application.initialize()
+        await application.updater.start_polling()
+        await application.start()
+        logger.info(f"Bot with token ending in ...{token[-4:]} started successfully.")
+        # Keep it running
+        while True:
+            await asyncio.sleep(3600) # Sleep for a long time
+    except Exception as e:
+        logger.error(f"Failed to run bot with token ...{token[-4:]}. Error: {e}")
 
 async def main_async():
-    """The main entry point for the bot factory."""
     if not TOKEN or not BOT_OWNER_ID: 
         logger.critical("Main bot TOKEN and BOT_OWNER_ID are not set!")
         return
     load_all_data()
     
-    # Start Flask in a separate thread
-    Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': int(os.environ.get('PORT', 8080))}, daemon=True).start()
+    # Run Flask in a separate thread, ensuring it only starts once
+    flask_thread = Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': int(os.environ.get('PORT', 8080))}, daemon=True)
+    flask_thread.start()
+    logger.info(f"Flask server started. Dashboard is available.")
 
     # Create a list of all tokens (main bot + child bots)
     all_tokens = [TOKEN] + list(CHILD_BOTS.keys())
     
-    bot_tasks = []
-    for token in all_tokens:
-        try:
-            bot_instance = Bot(token)
-            await bot_instance.get_me() # Test token validity
-            application = Application.builder().token(token).build()
-            register_handlers(application)
-            bot_tasks.append(run_bot(application))
-            logger.info(f"Successfully prepared bot with token ending in ...{token[-4:]}")
-        except Exception as e:
-            logger.error(f"Failed to prepare bot with token ending in ...{token[-4:]}. Error: {e}")
-
-    if not bot_tasks:
-        logger.critical("No valid bots could be started. Exiting.")
-        return
-
-    logger.info(f"Bot Factory [v{BOT_VERSION}] is starting {len(bot_tasks)} bot(s)...")
-    await asyncio.gather(*bot_tasks)
-
+    tasks = [run_bot_instance(token) for token in all_tokens]
+    
+    logger.info(f"Bot Factory [v{BOT_VERSION}] is starting {len(tasks)} bot instance(s)...")
+    await asyncio.gather(*tasks)
 
 if __name__ == '__main__':
     try:
         asyncio.run(main_async())
     except KeyboardInterrupt:
         logger.info("Bot shutting down...")
+    except Exception as e:
+        logger.critical(f"A critical error occurred in main execution: {e}")
