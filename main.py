@@ -25,7 +25,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '12.0.3') # Next Restock & Weather Fix
+BOT_VERSION = os.environ.get('BOT_VERSION', '12.0.4') # Final Restock & Weather Update
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
@@ -107,14 +107,15 @@ async def log_user_activity(user: User, command: str, bot: Bot):
 # --- HELPER & CORE BOT FUNCTIONS ---
 def get_ph_time()->datetime: return datetime.now(PHT)
 def format_value(val: int) -> str:
-    if val >= 1_000_000: return f"x{val / 1_000_000:.1f}M"
-    if val >= 1_000: return f"x{val / 1_000:.1f}K"
+    if val >= 1_000_000: return f"x{(val / 1_000_000):.1f}M"
+    if val >= 1_000: return f"x{(val / 1_000):.1f}K"
     return f"x{val}"
 def add_emoji(name: str) -> str:
     emojis = {"Common Egg": "🥚", "Uncommon Egg": "🐣", "Rare Egg": "🍳", "Legendary Egg": "🪺", "Mythical Egg": "🥚", "Bug Egg": "🪲", "Watering Can": "🚿", "Trowel": "🛠️", "Recall Wrench": "🔧", "Basic Sprinkler": "💧", "Advanced Sprinkler": "💦", "Godly Sprinkler": "⛲", "Lightning Rod": "⚡", "Master Sprinkler": "🌊", "Favorite Tool": "❤️", "Harvest Tool": "🌾", "Carrot": "🥕", "Strawberry": "🍓", "Blueberry": "🫐", "Orange Tulip": "🌷", "Tomato": "🍅", "Corn": "🌽", "Daffodil": "🌼", "Watermelon": "🍉", "Pumpkin": "🎃", "Apple": "🍎", "Bamboo": "🎍", "Coconut": "🥥", "Cactus": "🌵", "Dragon Fruit": "🍈", "Mango": "🥭", "Grape": "🍇", "Mushroom": "🍄", "Pepper": "🌶️", "Cacao": "🍫", "Beanstalk": "🌱", "Ember Lily": "🔥"}
     return f"{emojis.get(name, '❔')} {name}"
 def format_timedelta(td: timedelta, short=False) -> str:
     total_seconds = int(td.total_seconds())
+    if total_seconds < 0: total_seconds = 0
     days, remainder = divmod(total_seconds, 86400)
     hours, remainder = divmod(remainder, 3600)
     minutes, seconds = divmod(remainder, 60)
@@ -128,43 +129,37 @@ def calculate_next_restock_times() -> dict[str, datetime]:
     now = get_ph_time()
     next_times = {}
     
-    # 5-minute cycle (Gear, Seed)
     next_5_min = now.replace(second=0, microsecond=0)
     next_minute_val = (now.minute // 5 + 1) * 5
     if next_minute_val >= 60: next_5_min = (next_5_min + timedelta(hours=1)).replace(minute=0)
     else: next_5_min = next_5_min.replace(minute=next_minute_val)
     next_times["Gear"] = next_times["Seed"] = next_5_min
 
-    # 30-minute cycle (Egg)
     next_egg_min = now.replace(second=0, microsecond=0)
     if now.minute < 30: next_egg_min = next_egg_min.replace(minute=30)
     else: next_egg_min = (next_egg_min + timedelta(hours=1)).replace(minute=0)
     next_times["Egg"] = next_egg_min
     
-    # Hourly cycle (Honey)
     next_times["Honey"] = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
     
-    # 7-hour cycle (Cosmetics)
     restock_hours = [0, 7, 14, 21]
     next_cosmetic_time = now.replace(minute=0, second=0, microsecond=0)
     for h in restock_hours:
-        if now.hour < h:
-            next_cosmetic_time = next_cosmetic_time.replace(hour=h)
-            break
-    else: # If all hours have passed for today
-        next_cosmetic_time = (next_cosmetic_time + timedelta(days=1)).replace(hour=0)
+        if now.hour < h: next_cosmetic_time = next_cosmetic_time.replace(hour=h); break
+    else: next_cosmetic_time = (next_cosmetic_time + timedelta(days=1)).replace(hour=0)
     next_times["Cosmetics"] = next_cosmetic_time
     
     return next_times
 def format_category_message(category_name: str, items: list, restock_timer: str) -> str:
-    header_emojis = {"Gear": "🛠️", "Seed": "🌱", "Egg": "🥚", "Cosmetics": "🎨", "Honey": "🍯"}
-    header = f"{header_emojis.get(category_name, '📦')} <b>Grow A Garden — {category_name} Stock</b>"
+    header_emojis = {"Gear": "🛠️ 𝗚𝗲𝗮𝗿", "Seed": "🌱 𝗦𝗲𝗲𝗱𝘀", "Egg": "🥚 𝗘𝗴𝗴𝘀", "Cosmetics": "🎨 𝗖𝗼𝘀𝗺𝗲𝘁𝗶𝗰𝘀", "Honey": "🍯 𝗛𝗼𝗻𝗲𝘆"}
+    header = f"{header_emojis.get(category_name, '📦')} — 𝗦𝘁𝗼𝗰𝗸"
     item_list = "\n".join([f"• {add_emoji(i['name'])}: {format_value(i['value'])}" for i in items]) if items else "<i>No items currently in stock.</i>"
-    return f"{header}\n\n{item_list}\n\n⏳ Restock in: {restock_timer}"
+    return f"<b>{header}</b>\n\n{item_list}\n\n⏳ Restock In: {restock_timer}"
 def format_weather_message(weather_data: dict) -> str:
     icon = weather_data.get("icon", "❓")
     name = weather_data.get("name", "Unknown")
-    return f"{icon} <b>Current Weather:</b> {name}"
+    bonus = weather_data.get("cropBonuses", "None")
+    return f"{icon} <b>Current Weather:</b> {name}\n🌾 <b>Crop Bonus:</b> {bonus}"
 async def send_music_vm(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     try:
         ydl_opts = {'format': 'bestaudio/best', 'outtmpl': f'{chat_id}_%(title)s.%(ext)s', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}], 'quiet': True}
@@ -179,10 +174,14 @@ async def fetch_all_data() -> dict | None:
             stock_res.raise_for_status(); weather_res.raise_for_status()
             stock_data_raw, weather_data_raw = stock_res.json()['data'], weather_res.json()
             
-            # Robust weather parsing
-            weather_info_source = weather_data_raw.get('data') if isinstance(weather_data_raw.get('data'), dict) else weather_data_raw
-            
-            all_data = {"stock": {}, "weather": {"name": weather_info_source.get("name", "Unknown"), "icon": weather_info_source.get("icon", "❓")}}
+            all_data = {
+                "stock": {},
+                "weather": {
+                    "name": weather_data_raw.get("currentWeather", "Unknown"),
+                    "icon": weather_data_raw.get("icon", "❓"),
+                    "cropBonuses": weather_data_raw.get("cropBonuses", "None")
+                }
+            }
             for cat, details in stock_data_raw.items():
                 if 'items' in details: all_data["stock"][cat.capitalize()] = [{'name': item['name'], 'value': int(item['quantity'])} for item in details.get('items', [])]
             return all_data
@@ -229,7 +228,7 @@ async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TY
                             countdown_str = format_timedelta(time_left, short=True)
                             
                             category_message = format_category_message(category_name, items_to_show, countdown_str)
-                            alert_message = f"🔄 <b>{category_name} has been updated!</b>"
+                            alert_message = f"🔄 <b>{category_name.upper()} HAS BEEN UPDATED!</b>"
                             try: await bot.send_message(chat_id, text=alert_message, parse_mode=ParseMode.HTML); await bot.send_message(chat_id, text=category_message, parse_mode=ParseMode.HTML)
                             except Exception as e: logger.error(f"Failed category alert to {chat_id}: {e}")
             LAST_SENT_DATA[chat_id] = new_data
@@ -339,7 +338,6 @@ async def next_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     schedule_lines = []
     category_emojis = {"Seed": "🌱", "Gear": "🛠️", "Egg": "🥚", "Honey": "🍯", "Cosmetics": "🎨"}
 
-    # Order the categories for display
     ordered_categories = ["Seed", "Gear", "Egg", "Honey", "Cosmetics"]
 
     for category in ordered_categories:
