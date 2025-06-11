@@ -26,7 +26,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '12.0.1') # Bugfix Release
+BOT_VERSION = os.environ.get('BOT_VERSION', '12.0.1')
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
@@ -493,6 +493,36 @@ async def requestvip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for admin_id in ADMIN_USERS:
         try: await context.bot.send_message(chat_id=admin_id, text=admin_msg, parse_mode=ParseMode.HTML)
         except Exception as e: logger.error(f"Failed to send VIP request notice to admin {admin_id}: {e}")
+async def addcommand_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, "/addcommand", context.bot)
+    try:
+        if len(context.args) < 3: raise ValueError
+        name, permission, response = context.args[0].lower(), context.args[1].lower(), " ".join(context.args[2:])
+        if not name.isalnum(): await update.message.reply_text("❌ Command name can only contain letters and numbers."); return
+        if permission not in ["user", "admin", "both"]: await update.message.reply_text("❌ Permission must be 'user', 'admin', or 'both'."); return
+        CUSTOM_COMMANDS[name] = {"response": response, "permission": permission}; save_json_to_file("custom_commands.json", CUSTOM_COMMANDS)
+        await update.message.reply_text(f"✅ Custom command `/{name}` created!\n\nUse /restart for the new command to become active.", parse_mode=ParseMode.HTML)
+    except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/addcommand [name] [permission] [response]</code>\n\n- <b>Permission</b> can be: user, admin, or both.", parse_mode=ParseMode.HTML)
+async def delcommand_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, "/delcommand", context.bot)
+    try:
+        name = context.args[0].lower()
+        if name in CUSTOM_COMMANDS:
+            del CUSTOM_COMMANDS[name]; save_json_to_file("custom_commands.json", CUSTOM_COMMANDS)
+            await update.message.reply_text(f"🗑️ Custom command `/{name}` deleted.\n\nUse /restart for this change to take effect.", parse_mode=ParseMode.HTML)
+        else: await update.message.reply_text(f"❌ Command `/{name}` not found.")
+    except IndexError: await update.message.reply_text("⚠️ Usage: <code>/delcommand [name]</code>", parse_mode=ParseMode.HTML)
+async def listcommands_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id not in ADMIN_USERS: return
+    await log_user_activity(user, "/listcommands", context.bot)
+    if not CUSTOM_COMMANDS: await update.message.reply_text("There are no custom commands currently set."); return
+    message = "<b>🔧 Custom Commands List</b>\n\n" + "\n".join([f"• <code>/{name}</code> (Permission: {data['permission']})" for name, data in CUSTOM_COMMANDS.items()])
+    await update.message.reply_html(message)
 
 # --- USER COMMANDS & REPLY HANDLER ---
 async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -610,7 +640,7 @@ def main():
     # User Commands
     application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd)); application.add_handler(CommandHandler("stats", stats_cmd)); application.add_handler(CommandHandler("requestvip", requestvip_cmd))
     # Admin Commands
-    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("restart", restart_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd)); application.add_handler(CommandHandler("extendvip", extendvip_cmd)); application.add_handler(CommandHandler("access", access_cmd));
+    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("restart", restart_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd)); application.add_handler(CommandHandler("extendvip", extendvip_cmd)); application.add_handler(CommandHandler("access", access_cmd)); application.add_handler(CommandHandler("addcommand", addcommand_cmd)); application.add_handler(CommandHandler("delcommand", delcommand_cmd)); application.add_handler(CommandHandler("listcommands", listcommands_cmd))
     # Handlers
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     application.add_handler(MessageHandler(filters.REPLY, reply_handler))
