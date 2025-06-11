@@ -874,7 +874,7 @@ async def update_and_redeploy_handler(update: Update, context: ContextTypes.DEFA
         os.execv(sys.executable, ['python'] + sys.argv)
     except py_compile.PyCompileError as e:
         await msg.edit_text(f"❌ <b>SYNTAX ERROR!</b>\n\nDeployment cancelled.\n<pre>{e}</pre>", parse_mode=ParseMode.HTML)
-        os.remove(temp_script_name)
+        if os.path.exists(temp_script_name): os.remove(temp_script_name)
     except Exception as e:
         logger.error(f"Error during update process: {e}")
         await msg.edit_text(f"❌ An error occurred: {e}")
@@ -896,6 +896,8 @@ async def handle_post_update_notifications(app: Application):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     sent_count = 0
+    # We must initialize the app to send messages before the main polling starts
+    await app.initialize() 
     for user_id in AUTHORIZED_USERS:
         if user_id in BANNED_USERS: continue
         try:
@@ -910,8 +912,12 @@ async def handle_post_update_notifications(app: Application):
         except Exception: pass
     os.remove(update_flag_path)
     logger.info("Update flag removed.")
+    # We shutdown the temporary notifier app instance
+    await app.shutdown()
+
 
 def register_handlers(app: Application):
+    # This function remains exactly the same as before
     all_handlers = { "start": start_cmd, "stop": stop_cmd, "refresh": refresh_cmd, "next": next_cmd, "registerbot": register_bot_cmd, "help": help_cmd, "mute": mute_cmd, "unmute": unmute_cmd, "recent": recent_cmd, "listprized": listprized_cmd, "stats": stats_cmd, "requestvip": requestvip_cmd, "admin": admin_cmd, "approvebot": approve_bot_cmd, "uptime": uptime_cmd, "deploy": deploy_cmd, "approve": approve_cmd, "addadmin": add_admin_cmd, "msg": msg_cmd, "adminlist": adminlist_cmd, "addprized": addprized_cmd, "delprized": delprized_cmd, "restart": restart_cmd, "broadcast": broadcast_cmd, "extendvip": extendvip_cmd, "access": access_cmd, "addcommand": addcommand_cmd, "delcommand": delcommand_cmd, "listcommands": listcommands_cmd }
     for cmd_name, func in all_handlers.items(): app.add_handler(CommandHandler(cmd_name, func))
     
@@ -923,45 +929,50 @@ def register_handlers(app: Application):
     if app.bot.token == TOKEN:
         app.job_queue.run_once(check_for_updates, 15, data=app)
 
-async def run_bot(app: Application):
-    """Initializes and runs a single bot instance."""
-    try:
-        # ### FIX: Initialization must happen BEFORE accessing bot properties. ###
-        await app.initialize()
-        logger.info(f"Starting bot @{app.bot.username}...")
-        await app.run_polling()
-    except Exception as e:
-        logger.critical(f"FATAL: Bot crashed during startup or runtime. Error: {e}")
-    finally:
-        if app.running:
-            logger.info(f"Shutting down bot @{app.bot.username}...")
-            await app.stop()
 
+# ### FIX: A more resilient run function that doesn't try to stop the loop ###
+async def run_bot(app: Application):
+    """Initializes and runs a single bot instance. Will raise exceptions on failure."""
+    await app.initialize()
+    logger.info(f"Starting bot polling for @{app.bot.username}...")
+    await app.run_polling()
+
+
+# ### FIX: A more resilient main function to handle crashes gracefully ###
 async def main_async():
-    if not TOKEN or not BOT_OWNER_ID: 
-        logger.critical("Main bot TOKEN and BOT_OWNER_ID are not set!"); 
+    if not TOKEN or not BOT_OWNER_ID:
+        logger.critical("Main bot TOKEN and BOT_OWNER_ID are not set!")
         return
     load_all_data()
-    
+
     Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': int(os.environ.get('PORT', 8080))}, daemon=True).start()
 
-    main_app = Application.builder().token(TOKEN).build()
-    register_handlers(main_app)
-    await handle_post_update_notifications(main_app)
+    # Create a temporary app instance JUST for sending notifications
+    notifier_app = Application.builder().token(TOKEN).build()
+    await handle_post_update_notifications(notifier_app)
 
-    bot_tasks = [run_bot(main_app)]
-    child_tokens = set(CHILD_BOTS.keys()) - {TOKEN}
+    # Now, build the real applications for long-term polling
+    bot_tasks = []
+    try:
+        main_app = Application.builder().token(TOKEN).build()
+        register_handlers(main_app)
+        bot_tasks.append(run_bot(main_app))
 
-    for token in child_tokens:
-        try:
-            child_app = Application.builder().token(token).build()
-            register_handlers(child_app)
-            bot_tasks.append(run_bot(child_app))
-        except Exception as e:
-            logger.error(f"Failed to prepare child bot with token ending in ...{token[-4:]}. Error: {e}")
+        child_tokens = set(CHILD_BOTS.keys()) - {TOKEN}
+        for token in child_tokens:
+            try:
+                child_app = Application.builder().token(token).build()
+                register_handlers(child_app)
+                bot_tasks.append(run_bot(child_app))
+            except Exception as e:
+                logger.error(f"Failed to prepare child bot with token ending in ...{token[-4:]}. Error: {e}")
+        
+        logger.info(f"Bot Factory [v{BOT_VERSION}] is starting {len(bot_tasks)} bot(s)...")
+        await asyncio.gather(*bot_tasks)
 
-    logger.info(f"Bot Factory [v{BOT_VERSION}] is starting {len(bot_tasks)} bot(s)...")
-    await asyncio.gather(*bot_tasks)
+    except Exception as e:
+        logger.critical(f"FATAL: A bot has crashed, shutting down the process. Error: {e}")
+
 
 if __name__ == '__main__':
     try:
