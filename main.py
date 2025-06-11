@@ -25,7 +25,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN') # Token for the main "Hub" bot
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '14.0.1') # Final Stability Patch
+BOT_VERSION = os.environ.get('BOT_VERSION', '14.0.2') # Final Callback Fix
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 BOT_CREATOR_NAME = os.environ.get('BOT_CREATOR_NAME', 'Sunnel')
 RENDER_DEPLOY_HOOK_URL = os.environ.get('RENDER_DEPLOY_HOOK_URL')
@@ -232,6 +232,10 @@ async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TY
         if chat_id in ACTIVE_TRACKERS: del ACTIVE_TRACKERS[chat_id]
         if chat_id in LAST_SENT_DATA: del LAST_SENT_DATA[chat_id]
 
+# --- AESTHETIC HTML TEMPLATES ---
+DASHBOARD_HTML = """<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Bot Dashboard</title><script src="https://cdn.jsdelivr.net/npm/tsparticles-slim@2.12.0/tsparticles.slim.bundle.min.js"></script><style>:root{--bg:#0d1117;--primary:#c9a4ff;--secondary:#58a6ff;--surface:#161b22;--on-surface:#e6edf3;--border:#3036d;--red:#f85149;}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background-color:var(--bg);color:var(--on-surface);margin:0;padding:1.5rem;overflow-x:hidden;}#tsparticles{position:fixed;top:0;left:0;width:100%;height:100%;z-index:-1;}.container{max-width:1200px;margin:auto;animation:fadeIn 0.8s ease-out;}.header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:1rem;margin-bottom:2rem;}h1, h2{font-weight:600;color:white;letter-spacing:-1px;}h1{margin:0;font-size:1.8rem;} h2{border-bottom:1px solid var(--border);padding-bottom:10px;margin:2.5rem 0 1.5rem 0;}h2 i{margin-right:0.5rem;color:var(--primary);}.logout-btn{color:var(--red);text-decoration:none;background-color:rgba(248,81,73,0.1);padding:10px 15px;border-radius:6px;border:1px solid var(--red);font-weight:500;transition:all 0.2s;}.logout-btn:hover{background-color:rgba(248,81,73,0.2);transform:translateY(-2px);}.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1.5rem;margin-bottom:2.5rem;}.stat-card{background:linear-gradient(145deg,rgba(255,255,255,0.05),rgba(255,255,255,0));backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);padding:1.5rem;border-radius:12px;border:1px solid var(--border);display:flex;align-items:center;gap:1.5rem;transition:all 0.3s ease;}.stat-card:hover{transform:translateY(-5px);box-shadow:0 10px 20px rgba(0,0,0,0.2);}.stat-card .icon{font-size:1.8rem;color:var(--primary);background:linear-gradient(145deg,rgba(201,164,255,0.1),rgba(201,164,255,0.2));width:60px;height:60px;border-radius:50%;display:grid;place-items:center;}.stat-card .value{font-size:2.8rem;font-weight:700;color:white;} .stat-card .label{font-size:1rem;color:#8b949e;}.user-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1.5rem;}.user-card{background-color:var(--surface);border-radius:12px;border:1px solid var(--border);padding:1.5rem;display:flex;align-items:center;gap:1rem;transition:all 0.3s ease;}.user-card:hover{transform:translateY(-5px);box-shadow:0 10px 20px rgba(0,0,0,0.2);}.user-card img{width:50px;height:50px;border-radius:50%;border:2px solid var(--border);}.user-card .name{font-weight:600;color:white;} .user-card .username{color:#8b949e;font-size:0.9em;}.user-card .status{margin-left:auto;padding:5px 10px;border-radius:20px;font-size:0.8rem;font-weight:600;}.status.muted{background-color:rgba(248,81,73,0.1);color:var(--red);} .status.active{background-color:rgba(46,160,67,0.15);color:#3fb950;}.activity-log{background-color:var(--surface);border-radius:12px;border:1px solid var(--border);overflow:hidden;box-shadow:0 5px 15px rgba(0,0,0,0.1);}table{width:100%;border-collapse:collapse;}th,td{text-align:left;padding:16px 20px;}th{background-color:rgba(187,134,252,0.05);color:var(--primary);font-weight:600;text-transform:uppercase;font-size:0.8rem;letter-spacing:0.5px;}tbody tr{border-bottom:1px solid var(--border);transition:background-color 0.2s;}tbody tr:last-child{border-bottom:none;}tbody tr:hover{background-color:rgba(88,166,255,0.08);}.user-cell{display:flex;align-items:center;gap:15px;}.user-cell img{width:45px;height:45px;border-radius:50%;border:2px solid var(--border);}.user-cell .name{font-weight:600;color:white;}.user-cell .username{color:#8b949e;font-size:0.9em;}code{background-color:#2b2b2b;color:var(--secondary);padding:4px 8px;border-radius:4px;font-family:"SF Mono","Fira Code",monospace;}@keyframes fadeIn{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}@media(max-width:768px){body{padding:1rem;}.header,h1{flex-direction:column;gap:1rem;text-align:center;}.stats-grid,.user-grid{grid-template-columns:1fr;}h1{font-size:1.5rem;}.stat-card .value{font-size:2.2rem;}}</style><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"></head><body><div id="tsparticles"></div><div class="container"><div class="header"><h1><i class="fa-solid fa-shield-halved"></i> GAG Bot Dashboard</h1><a href="/logout" class="logout-btn"><i class="fa-solid fa-arrow-right-from-bracket"></i> Logout</a></div><div class="stats-grid"><div class="stat-card"><div class="icon"><i class="fa-solid fa-users"></i></div><div><div class="value" data-target="{{ stats.authorized_users }}">0</div><div class="label">Total Authorized Users</div></div></div><div class="stat-card"><div class="icon"><i class="fa-solid fa-user-shield"></i></div><div><div class="value" data-target="{{ stats.admins }}">0</div><div class="label">Admins</div></div></div></div><h2><i class="fa-solid fa-satellite-dish"></i> Active Trackers ({{ stats.active_trackers }})</h2><div class="user-grid">{% for user in active_users %}<div class="user-card"><img src="{{ user.avatar_url }}" alt="Avatar"><div><div class="name">{{ user.first_name }}</div><div class="username">@{{ user.username }}</div></div><div class="status {{ 'muted' if user.is_muted else 'active' }}">{{ 'MUTED' if user.is_muted else 'ACTIVE' }}</div></div>{% else %} <p>No users are currently tracking.</p> {% endfor %}</div><h2><i class="fa-solid fa-chart-line"></i> Recent Activity</h2><div class="activity-log"><table><thead><tr><th>User</th><th>Command</th><th>Time</th></tr></thead><tbody>{% for log in activity %}<tr><td><div class="user-cell"><img src="{{ log.avatar_url }}" alt="Avatar"><div><div class="name">{{ log.first_name }}</div><div class="username">@{{ log.username }}</div></div></div></td><td><code>{{ log.command }}</code></td><td>{{ log.time_ago }} ago</td></tr>{% endfor %}</tbody></table></div></div><script>document.addEventListener("DOMContentLoaded",function(){tsParticles.load("tsparticles",{preset:"stars",background:{color:{value:"#0d1117"}},particles:{color:{value:"#ffffff"},links:{color:"#ffffff",distance:150,enable:!0,opacity:.1,width:1},move:{enable:!0,speed:.5},number:{density:{enable:!0,area:800},value:40}}});document.querySelectorAll(".value").forEach(e=>{const t=+e.getAttribute("data-target"),o=()=>{const a=+e.innerText;if(a<t){e.innerText=`${Math.ceil(a+t/100)}`;setTimeout(o,20)}else{e.innerText=t}};o()})});</script></body></html>"""
+LOGIN_HTML = """<!DOCTYPE html><html><head><title>Admin Login</title><style>:root{--bg:#0d1117;--primary:#c9a4ff;--surface:#161b22;--border:#21262d;--red:#f85149;}body{display:flex;justify-content:center;align-items:center;height:100vh;background-color:var(--bg);color:white;font-family:-apple-system,sans-serif;}.login-box{background-color:var(--surface);padding:40px;border-radius:12px;border:1px solid var(--border);text-align:center;width:340px;box-shadow:0 10px 30px rgba(0,0,0,0.2);animation:fadeIn 0.5s ease-out;}h2{color:var(--primary);margin-top:0;margin-bottom:25px;font-weight:600;letter-spacing:-0.5px;}input{width:100%;box-sizing:border-box;padding:14px;margin-bottom:15px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:white;font-size:1rem;transition:border-color 0.2s;}input:focus{border-color:var(--primary);outline:none;}button{width:100%;padding:14px;background:linear-gradient(90deg,var(--primary),#9a66e2);color:black;border:none;border-radius:8px;cursor:pointer;font-weight:bold;font-size:1rem;transition:all 0.2s;}button:hover{transform:translateY(-2px);box-shadow:0 4px 15px rgba(201,164,255,0.2);}.error{color:var(--red);background-color:rgba(248,81,73,0.1);padding:10px;border-radius:6px;margin-top:15px;border:1px solid var(--red);}@keyframes fadeIn{from{opacity:0;transform:scale(0.95);}to{opacity:1;transform:scale(1);}}</style></head><body><div class="login-box"><form method="post"><h2>Bot Dashboard Login</h2><input type="text" name="username" placeholder="Username" required><input type="password" name="password" placeholder="Password" required><button type="submit">Login</button>{% if error %}<p class="error">{{ error }}</p>{% endif %}</form></div></body></html>"""
+
 # --- FLASK WEB ROUTES ---
 @app.route('/')
 def home_route(): return "Bot is alive. Admin dashboard is at /login."
@@ -249,7 +253,7 @@ def dashboard_route():
     for user_id, tracker_data in ACTIVE_TRACKERS.items():
         user_info = USER_INFO_CACHE.get(str(user_id))
         if user_info:
-            avatar_url = f"https://i.imgur.com/jpfrJd3.png" # Generic avatar for simplicity
+            avatar_url = f"https://i.imgur.com/jpfrJd3.png" 
             active_users.append({'first_name': user_info['first_name'], 'username': user_info['username'], 'avatar_url': avatar_url, 'is_muted': tracker_data['is_muted']})
     for log in USER_ACTIVITY:
         time_diff = datetime.now(pytz.utc) - datetime.fromisoformat(log['timestamp'])
@@ -259,7 +263,8 @@ def dashboard_route():
 @app.route('/logout')
 def logout_route(): session.pop('logged_in', None); return redirect(url_for('login_route'))
 
-# --- TELEGRAM COMMAND HANDLERS ---
+# --- ALL COMMAND HANDLERS ---
+# (Includes all user and admin commands)
 async def send_full_stock_report(update: Update, context: ContextTypes.DEFAULT_TYPE, filters: list[str]):
     loader_message = await update.message.reply_text("🛰️ Connecting to GAG Network... Please wait.")
     
@@ -394,8 +399,6 @@ async def register_bot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for admin_id in ADMIN_USERS:
         try: await context.application.bot.send_message(chat_id=admin_id, text=admin_msg, parse_mode=ParseMode.HTML)
         except Exception as e: logger.error(f"Failed to send bot reg notice to admin {admin_id}: {e}")
-
-# --- ADMIN COMMANDS ---
 async def approve_bot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
     if admin.id not in ADMIN_USERS: return
@@ -409,22 +412,18 @@ async def approve_bot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_html(f"❌ <b>Invalid Code</b>\n\nNo registration request found for code <code>{request_code}</code>.")
         return
     user_id = request_data["user_id"]; bot_name = request_data["bot_name"]; bot_token = request_data["bot_token"]; bot_username = request_data["bot_username"]
-    
     CHILD_BOTS[bot_token] = {"name": bot_name, "owner_id": user_id, "username": bot_username, "approved_by": admin.id, "created_at": datetime.now(pytz.utc).isoformat()}
     save_json_to_file("child_bots.json", CHILD_BOTS)
-    
     del BOT_REGISTRATION_REQUESTS[request_code]
     save_json_to_file("bot_registrations.json", BOT_REGISTRATION_REQUESTS)
-    
     logger.info(f"Admin {admin.id} approved bot @{bot_username}. Starting it automatically...")
     new_bot_app = Application.builder().token(bot_token).build()
     register_handlers(new_bot_app)
     asyncio.create_task(run_bot(new_bot_app))
-    
     await update.message.reply_html(f"✅ <b>Success!</b>\n\nYou have approved @{bot_username}. It is now active and running automatically.")
-    
     success_message = f"🎉 <b>Bot Approved & Activated!</b> 🎉\n\nCongratulations! Your bot '<b>{bot_name}</b>' has been approved and is now online.\n\n➡️ <b>Your bot's link:</b> https://t.me/{bot_username}"
-    try: await context.application.bot.send_message(chat_id=user_id, text=success_message, parse_mode=ParseMode.HTML)
+    try:
+        await context.application.bot.send_message(chat_id=user_id, text=success_message, parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"Failed to send bot approval success message to {user_id}: {e}")
         await update.message.reply_html(f"⚠️ Could not notify the user. Please message them manually.")
@@ -432,11 +431,9 @@ async def deploy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
     if admin.id not in ADMIN_USERS: return
     await log_user_activity(admin, "/deploy", context.bot)
-
     if not RENDER_DEPLOY_HOOK_URL:
         await update.message.reply_html("⚠️ <b>Deploy Hook Not Configured</b>\n\nThe `RENDER_DEPLOY_HOOK_URL` environment variable is not set. Cannot trigger deployment.")
         return
-
     msg = await update.message.reply_text("🚀 Sending deployment signal to Render...")
     try:
         async with httpx.AsyncClient() as client:
@@ -754,8 +751,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_vip = str(user.id) in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(str(user.id), '1970-01-01T00:00:00+00:00')) > datetime.now(pytz.utc)
     guide = f"📘 <b>GAG Stock Alerter Guide</b> (v{BOT_VERSION})\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › " + ("Starts VIP background tracking." if is_vip else "Shows current stock.") + "\n🔄  <b>/refresh</b> › Manually shows current stock.\n🗓️  <b>/next</b> › Shows the next restock schedule.\n🤖  <b>/registerbot</b> <code>[token] [name]</code> › Register your own bot (VIP Only).\n📈  <b>/recent</b> › Shows recent items.\n📊  <b>/stats</b> › View your personal bot usage stats.\n💎  <b>/listprized</b> › Shows the prized items list.\n"
     if not is_vip: guide += "⭐  <b>/requestvip</b> › Request a ticket for VIP status.\n"
-    if is_vip: guide += "🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles VIP notifications.\n⏹️  <b>/stop</b> › Stops the VIP tracker completely.\n\n"
-    if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n🤖  <b>/approvebot</b> <code>[code]</code> › Approves a new user bot.\n🚀  <b>/deploy</b> › Triggers a new deployment on Render.\n🕒  <b>/uptime</b> › Shows the bot's current running time.\n📢  <b>/broadcast</b> <code>[msg]</code> › Send a message to all users.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n🎟️  <b>/access</b> <code>[ticket]</code> › Grants VIP using a ticket code.\n⏳  <b>/extendvip</b> <code>[id] [days]</code> › Extends a user's VIP.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/restart</b> › Restarts the bot process.\n"
+    if is_vip: guide += "🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles VIP notifications.\n⏹️  <b>/stop</b> › Stops the VIP tracker completely.\n"
+    if user.id in ADMIN_USERS: guide += "\n<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n🤖  <b>/approvebot</b> <code>[code]</code> › Approves a new user bot.\n🚀  <b>/deploy</b> › Triggers a new deployment on Render.\n🕒  <b>/uptime</b> › Shows the bot's current running time.\n📢  <b>/broadcast</b> <code>[msg]</code> › Send a message to all users.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n🎟️  <b>/access</b> <code>[ticket]</code> › Grants VIP using a ticket code.\n⏳  <b>/extendvip</b> <code>[id] [days]</code> › Extends a user's VIP.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/restart</b> › Restarts the bot process.\n"
     await update.message.reply_html(guide)
 async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -767,6 +764,20 @@ async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await context.application.bot.send_message(chat_id=admin_id, text=reply_text, parse_mode=ParseMode.HTML)
             except Exception as e: logger.error(f"Failed to forward reply to admin {admin_id}: {e}")
         await update.message.reply_text("✅ Your reply has been sent to the admins.")
+async def self_update_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    user = query.from_user
+    tracker_info = ACTIVE_TRACKERS.get(user.id)
+    if not tracker_info:
+        await query.message.edit_text("Your session has already ended. Please use /start to begin a new one.")
+        return
+    await query.message.edit_text("⚙️ Updating your session... Please wait.")
+    tracker_info['task'].cancel()
+    mock_chat = type('MockChat', (), {'id': user.id, 'type': 'private'})()
+    mock_message = type('MockMessage', (), {'from_user': user, 'chat': mock_chat, 'reply_text': query.message.reply_text, 'reply_html': query.message.reply_html,'delete': query.message.delete})()
+    mock_update = type('MockUpdate', (), {'effective_user': user, 'message': mock_message, 'effective_chat': mock_chat})
+    await start_cmd(mock_update, ContextTypes.DEFAULT_TYPE(application=context.application, chat_id=user.id, user_id=user.id))
+    await query.message.delete()
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
@@ -793,10 +804,12 @@ async def check_for_updates(context: ContextTypes.DEFAULT_TYPE):
     if BOT_VERSION != LAST_KNOWN_VERSION:
         logger.info(f"Version change detected! New: {BOT_VERSION}, Old: {LAST_KNOWN_VERSION}")
         if LAST_KNOWN_VERSION != "":
-            update_message = f"🚀 <b>A new version (v{BOT_VERSION}) is available!</b>\n\nPlease ask an admin to update your session to get the latest features and improvements."
+            update_message = f"🚀 <b>A new version (v{BOT_VERSION}) is available!</b>\n\nAn admin can update your session to get the latest features."
+            keyboard = [[InlineKeyboardButton("Update My Session", callback_data='self_update_session')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
             for chat_id, tracker_data in list(ACTIVE_TRACKERS.items()):
                 if tracker_data.get('version') != BOT_VERSION:
-                    try: await application.bot.send_animation(chat_id=chat_id, animation=UPDATE_GIF_URL, caption=update_message, parse_mode=ParseMode.HTML)
+                    try: await application.bot.send_message(chat_id=chat_id, text=update_message, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
                     except Exception as e: logger.error(f"Failed to send update notice to {chat_id}: {e}")
         version_filepath = os.path.join(DATA_DIR, "version.txt")
         with open(version_filepath, "w") as f: f.write(BOT_VERSION)
@@ -821,6 +834,7 @@ async def send_welcome_video(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         if 'filename' in locals() and os.path.exists(filename): os.remove(filename)
 
 def register_handlers(app: Application):
+    """This function registers all handlers to a given application instance."""
     all_handlers = {
         "start": start_cmd, "stop": stop_cmd, "refresh": refresh_cmd, "next": next_cmd,
         "registerbot": register_bot_cmd, "help": help_cmd, "mute": mute_cmd, "unmute": unmute_cmd,
@@ -840,9 +854,10 @@ def register_handlers(app: Application):
     app.add_handler(MessageHandler(filters.REPLY, reply_handler))
     
     if app.bot.token == TOKEN:
-        app.job_queue.run_once(check_for_updates, 15, data=app)
+        app.job_queue.run_once(check_for_updates, 15)
 
 async def run_bot(app: Application):
+    """Starts a single bot instance."""
     try:
         await app.initialize()
         await app.start()
@@ -884,6 +899,7 @@ async def main_async():
 
     logger.info(f"Bot Factory [v{BOT_VERSION}] is starting {len(bot_tasks)} bot(s)...")
     await asyncio.gather(*bot_tasks)
+
 
 if __name__ == '__main__':
     try:
