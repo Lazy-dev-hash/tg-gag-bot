@@ -23,11 +23,11 @@ app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'default-secret-key-for-loca
 ADMIN_USER = os.environ.get('ADMIN_USER', 'admin')
 ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
-TOKEN = os.environ.get('TOKEN')
+TOKEN = os.environ.get('TOKEN') # Token for the main "Hub" bot
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '12.0.6') # Bot Creation Workflow & Stability
+BOT_VERSION = os.environ.get('BOT_VERSION', '13.0.0') # Bot Factory & Stability
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
-BOT_CREATOR_NAME = os.environ.get('BOT_CREATOR_NAME', 'Sunnel') # Name for the /createbot signature
+BOT_CREATOR_NAME = os.environ.get('BOT_CREATOR_NAME', 'Sunnel')
 
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
 API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
@@ -39,8 +39,9 @@ DATA_DIR = "/data"
 
 # --- GLOBAL STATE ---
 ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
-AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS, BOT_CREATORS = set(), set(), set(), set(), set(), set()
-LAST_KNOWN_VERSION, USER_INFO_CACHE, VIP_USERS, VIP_REQUESTS, CUSTOM_COMMANDS, BOT_CREATION_REQUESTS = "", {}, {}, {}, {}, {}
+AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS = set(), set(), set(), set(), set()
+LAST_KNOWN_VERSION, USER_INFO_CACHE, VIP_USERS, VIP_REQUESTS, CUSTOM_COMMANDS = "", {}, {}, {}, {}
+CHILD_BOTS, BOT_REGISTRATION_REQUESTS = {}, {}
 BOT_START_TIME = datetime.now(pytz.utc)
 PHT = pytz.timezone('Asia/Manila')
 
@@ -59,10 +60,6 @@ def save_json_to_file(filename, data):
     filepath = os.path.join(DATA_DIR, filename)
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(filepath, 'w') as f: json.dump(data, f, indent=4)
-def load_set_from_file(filename):
-    filepath = os.path.join(DATA_DIR, filename);
-    if not os.path.exists(filepath): return set()
-    with open(filepath, 'r') as f: return {line.strip() for line in f if line.strip()}
 def load_int_set_from_file(filename):
     filepath = os.path.join(DATA_DIR, filename);
     if not os.path.exists(filepath): return set()
@@ -72,21 +69,21 @@ def save_to_file(filename, data_set):
     with open(filepath, 'w') as f:
         for item in data_set: f.write(f"{item}\n")
 def load_all_data():
-    global AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS, LAST_KNOWN_VERSION, VIP_USERS, CUSTOM_COMMANDS, VIP_REQUESTS, USER_INFO_CACHE, BOT_CREATORS, BOT_CREATION_REQUESTS
+    global AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS, LAST_KNOWN_VERSION, VIP_USERS, CUSTOM_COMMANDS, VIP_REQUESTS, USER_INFO_CACHE, CHILD_BOTS, BOT_REGISTRATION_REQUESTS
     AUTHORIZED_USERS = load_int_set_from_file("authorized_users.txt"); ADMIN_USERS = load_int_set_from_file("admins.txt")
     BANNED_USERS = load_int_set_from_file("banned_users.txt"); RESTRICTED_USERS = load_int_set_from_file("restricted_users.txt")
     PRIZED_ITEMS = load_set_from_file("prized_items.txt") or {"master sprinkler", "beanstalk", "advanced sprinkler", "godly sprinkler", "ember lily"}
-    BOT_CREATORS = load_int_set_from_file("bot_creators.txt")
     if BOT_OWNER_ID: AUTHORIZED_USERS.add(BOT_OWNER_ID); ADMIN_USERS.add(BOT_OWNER_ID)
     VIP_USERS = load_json_from_file("vips.json")
     USER_INFO_CACHE = load_json_from_file("user_info.json")
     CUSTOM_COMMANDS = load_json_from_file("custom_commands.json")
     VIP_REQUESTS = load_json_from_file("vip_requests.json")
-    BOT_CREATION_REQUESTS = load_json_from_file("bot_creation_requests.json")
+    CHILD_BOTS = load_json_from_file("child_bots.json")
+    BOT_REGISTRATION_REQUESTS = load_json_from_file("bot_registrations.json")
     version_path = os.path.join(DATA_DIR, "version.txt")
     if os.path.exists(version_path):
         with open(version_path, 'r') as f: LAST_KNOWN_VERSION = f.read().strip()
-    logger.info(f"Loaded {len(AUTHORIZED_USERS)} users, {len(ADMIN_USERS)} admins, {len(BOT_CREATORS)} bot creators. Loaded {len(PRIZED_ITEMS)} prized items. Loaded {len(VIP_USERS)} VIPs. Loaded {len(CUSTOM_COMMANDS)} custom commands.")
+    logger.info(f"Loaded {len(AUTHORIZED_USERS)} users, {len(ADMIN_USERS)} admins, and {len(CHILD_BOTS)} child bots.")
 
 async def log_user_activity(user: User, command: str, bot: Bot):
     if not user: return
@@ -154,13 +151,6 @@ def format_weather_message(weather_data: dict) -> str:
     name = weather_data.get("name", "Unknown")
     bonus = weather_data.get("cropBonuses", "None")
     return f"{icon} <b>Current Weather:</b> {name}\n🌾 <b>Crop Bonus:</b> {bonus}"
-async def send_music_vm(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    try:
-        ydl_opts = {'format': 'bestaudio/best', 'outtmpl': f'{chat_id}_%(title)s.%(ext)s', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}], 'quiet': True}
-        loop = asyncio.get_running_loop()
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl: info = await loop.run_in_executor(None, lambda: ydl.extract_info(MULTOMUSIC_URL, download=True)); filename = ydl.prepare_filename(info).replace('.webm', '.mp3').replace('.m4a', '.mp3')
-        await context.bot.send_audio(chat_id=chat_id, audio=open(filename, 'rb'), title="Multo", performer="Cup of Joe"); os.remove(filename)
-    except Exception as e: logger.error(f"Failed to send music to {chat_id}: {e}")
 async def fetch_all_data() -> dict | None:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -168,7 +158,6 @@ async def fetch_all_data() -> dict | None:
             stock_res.raise_for_status(); weather_res.raise_for_status()
             stock_data_raw, weather_data_raw = stock_res.json()['data'], weather_res.json()
             
-            # Hardened weather parsing to prevent KeyError
             weather_name = "Unknown"; weather_icon = "❓"; weather_bonus = "None"
             if isinstance(weather_data_raw, dict):
                 weather_name = weather_data_raw.get("currentWeather", "Unknown")
@@ -180,6 +169,13 @@ async def fetch_all_data() -> dict | None:
                 if 'items' in details: all_data["stock"][cat.capitalize()] = [{'name': item['name'], 'value': int(item['quantity'])} for item in details.get('items', [])]
             return all_data
     except Exception as e: logger.error(f"Error fetching all data: {e}"); return None
+async def send_music_vm(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    try:
+        ydl_opts = {'format': 'bestaudio/best', 'outtmpl': f'{chat_id}_%(title)s.%(ext)s', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}], 'quiet': True}
+        loop = asyncio.get_running_loop()
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl: info = await loop.run_in_executor(None, lambda: ydl.extract_info(MULTOMUSIC_URL, download=True)); filename = ydl.prepare_filename(info).replace('.webm', '.mp3').replace('.m4a', '.mp3')
+        await context.bot.send_audio(chat_id=chat_id, audio=open(filename, 'rb'), title="Multo", performer="Cup of Joe"); os.remove(filename)
+    except Exception as e: logger.error(f"Failed to send music to {chat_id}: {e}")
 async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TYPE, filters: list[str]):
     logger.info(f"Starting tracking for chat_id: {chat_id}")
     try:
@@ -339,91 +335,57 @@ async def next_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             schedule_lines.append(f"{emoji} <b>{category}:</b> <code>{time_str}</code> (in {countdown_str})")
     message = "🗓️ <b>Next Restock Schedule</b>\n<i>(Philippine Time, PHT)</i>\n\n" + "\n".join(schedule_lines)
     await update.message.reply_html(message)
-async def create_bot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def register_bot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
-    await log_user_activity(user, "/createbot", context.bot)
-    
+    await log_user_activity(user, "/registerbot", context.bot)
     is_vip = str(user.id) in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(str(user.id), '1970-01-01T00:00:00+00:00')) > datetime.now(pytz.utc)
     if not is_vip:
         await update.message.reply_html("❌ <b>VIP Membership Required</b>\n\nThis is an exclusive feature for our VIP members. Use /requestvip to learn more.")
         return
-        
-    bot_name = " ".join(context.args)
-    if not bot_name:
-        await update.message.reply_html("⚠️ <b>Usage:</b> <code>/createbot [Your Desired Bot Name]</code>")
+    if len(context.args) < 2:
+        await update.message.reply_html("⚠️ <b>Usage:</b> <code>/registerbot [TOKEN] [Your Bot Name]</code>\n\n1. Get a token from @BotFather.\n2. Choose a name for your bot.")
         return
-
-    if user.id in BOT_CREATORS:
-        await update.message.reply_html("✨ You've already established your bot's presence! Your creation is recognized across the network.")
+    token = context.args[0]
+    bot_name = " ".join(context.args[1:])
+    try:
+        test_bot = Bot(token); bot_info = await test_bot.get_me(); bot_username = bot_info.username
+    except Exception:
+        await update.message.reply_html("❌ <b>Invalid Token</b>\nThe token you provided seems to be incorrect. Please get a valid one from @BotFather.")
         return
-
-    request_code = f"BCR-{user.id}-{random.randint(1000, 9999)}"
-    BOT_CREATION_REQUESTS[request_code] = {"user_id": user.id, "bot_name": bot_name, "user_first_name": user.first_name}
-    save_json_to_file("bot_creation_requests.json", BOT_CREATION_REQUESTS)
-    
-    user_msg = (
-        f"⏳ <b>Request Submitted!</b>\n\n"
-        f"Your request to create the bot '<b>{bot_name}</b>' has been sent to the admins for approval.\n\n"
-        f"<b>Request Code:</b> <code>{request_code}</code>\n"
-        f"An admin will approve it shortly."
-    )
-    admin_msg = (
-        f"🤖 <b>New Bot Creation Request</b>\n\n"
-        f"<b>User:</b> {user.full_name} (<code>{user.id}</code>)\n"
-        f"<b>Requested Bot Name:</b> {bot_name}\n"
-        f"<b>Request Code:</b> <code>{request_code}</code>\n\n"
-        f"To approve, use: <code>/approvebot {request_code}</code>"
-    )
-
+    request_code = f"BRR-{user.id}-{random.randint(1000, 9999)}"
+    BOT_REGISTRATION_REQUESTS[request_code] = {"user_id": user.id, "user_first_name": user.first_name, "bot_name": bot_name, "bot_token": token, "bot_username": bot_username}
+    save_json_to_file("bot_registrations.json", BOT_REGISTRATION_REQUESTS)
+    user_msg = f"⏳ <b>Registration Submitted!</b>\n\nYour request to register '<b>{bot_name}</b>' has been sent to the admins for approval.\n\n<b>Request Code:</b> <code>{request_code}</code>"
+    admin_msg = f"🤖 <b>New Bot Registration Request</b>\n\n<b>User:</b> {user.full_name} (<code>{user.id}</code>)\n<b>Requested Bot Name:</b> {bot_name}\n<b>Bot Username:</b> @{bot_username}\n\nTo approve, use: <code>/approvebot {request_code}</code>"
     await update.message.reply_html(user_msg)
     for admin_id in ADMIN_USERS:
         try: await context.bot.send_message(chat_id=admin_id, text=admin_msg, parse_mode=ParseMode.HTML)
-        except Exception as e: logger.error(f"Failed to send bot creation notice to admin {admin_id}: {e}")
+        except Exception as e: logger.error(f"Failed to send bot reg notice to admin {admin_id}: {e}")
 
 # --- ADMIN COMMANDS ---
 async def approve_bot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
     if admin.id not in ADMIN_USERS: return
     await log_user_activity(admin, "/approvebot", context.bot)
-
     if not context.args:
         await update.message.reply_html("⚠️ <b>Usage:</b> <code>/approvebot [request_code]</code>")
         return
-        
     request_code = context.args[0]
-    request_data = BOT_CREATION_REQUESTS.get(request_code)
-    
+    request_data = BOT_REGISTRATION_REQUESTS.get(request_code)
     if not request_data:
-        await update.message.reply_html(f"❌ <b>Invalid Code</b>\n\nNo bot creation request found for code <code>{request_code}</code>.")
+        await update.message.reply_html(f"❌ <b>Invalid Code</b>\n\nNo registration request found for code <code>{request_code}</code>.")
         return
-        
-    user_id = request_data["user_id"]
-    bot_name = request_data["bot_name"]
-    user_first_name = request_data["user_first_name"]
-    
-    BOT_CREATORS.add(user_id)
-    save_to_file("bot_creators.txt", BOT_CREATORS)
-    
-    del BOT_CREATION_REQUESTS[request_code]
-    save_json_to_file("bot_creation_requests.json", BOT_CREATION_REQUESTS)
-    
-    await update.message.reply_html(f"✅ <b>Success!</b>\n\nYou have approved the bot '<b>{bot_name}</b>' for {user_first_name}.")
-    
-    success_message = (
-        f"🎉 <b>Bot Creation Successful!</b> 🎉\n\n"
-        f"Congratulations, {user_first_name}! Your request has been approved by an admin and your bot instance is now active.\n\n"
-        f"📜 <u>Official Certificate</u> 📜\n"
-        f"<b>Bot Name:</b> {bot_name}\n"
-        f"<b>Instance ID:</b> <code>GAG-{user_id}-{random.randint(1000, 9999)}</code>\n"
-        f"<b>Status:</b> <pre>ONLINE</pre>\n\n"
-        f"<i>This bot was created by <b>{BOT_CREATOR_NAME}</b>.</i>"
-    )
-    
-    try:
-        await context.bot.send_message(chat_id=user_id, text=success_message, parse_mode=ParseMode.HTML)
+    user_id = request_data["user_id"]; bot_name = request_data["bot_name"]; bot_token = request_data["bot_token"]; bot_username = request_data["bot_username"]
+    CHILD_BOTS[bot_token] = {"name": bot_name, "owner_id": user_id, "username": bot_username, "approved_by": admin.id, "created_at": datetime.now(pytz.utc).isoformat()}
+    save_json_to_file("child_bots.json", CHILD_BOTS)
+    del BOT_REGISTRATION_REQUESTS[request_code]
+    save_json_to_file("bot_registrations.json", BOT_REGISTRATION_REQUESTS)
+    await update.message.reply_html(f"✅ <b>Success!</b>\n\nYou have approved @{bot_username}.\n\n<b>IMPORTANT:</b> A <code>/restart</code> is required to activate this new bot.")
+    success_message = f"🎉 <b>Bot Approved!</b> 🎉\n\nCongratulations! Your bot '<b>{bot_name}</b>' has been approved by an admin.\n\n➡️ <b>Your bot's link:</b> https://t.me/{bot_username}\n\nIt will become active after the next system restart."
+    try: await context.bot.send_message(chat_id=user_id, text=success_message, parse_mode=ParseMode.HTML)
     except Exception as e:
-        logger.error(f"Failed to send bot creation success message to {user_id}: {e}")
+        logger.error(f"Failed to send bot approval success message to {user_id}: {e}")
         await update.message.reply_html(f"⚠️ Could not notify the user. Please message them manually.")
 async def uptime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -729,12 +691,11 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id not in AUTHORIZED_USERS: await update.message.reply_text("You need to be approved to use this bot. Send /start to begin the approval process."); return
     await log_user_activity(user, "/help", context.bot)
     is_vip = str(user.id) in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(str(user.id), '1970-01-01T00:00:00+00:00')) > datetime.now(pytz.utc)
-    guide = f"📘 <b>GAG Stock Alerter Guide</b> (v{BOT_VERSION})\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › " + ("Starts VIP background tracking." if is_vip else "Shows current stock.") + "\n🔄  <b>/refresh</b> › Manually shows current stock.\n🗓️  <b>/next</b> › Shows the next restock schedule.\n🤖  <b>/createbot</b> <code>[name]</code> › Request to create a bot instance (VIP Only).\n📈  <b>/recent</b> › Shows recent items.\n📊  <b>/stats</b> › View your personal bot usage stats.\n💎  <b>/listprized</b> › Shows the prized items list.\n"
+    guide = f"📘 <b>GAG Stock Alerter Guide</b> (v{BOT_VERSION})\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › " + ("Starts VIP background tracking." if is_vip else "Shows current stock.") + "\n🔄  <b>/refresh</b> › Manually shows current stock.\n🗓️  <b>/next</b> › Shows the next restock schedule.\n🤖  <b>/registerbot</b> <code>[token] [name]</code> › Register your own bot (VIP Only).\n📈  <b>/recent</b> › Shows recent items.\n📊  <b>/stats</b> › View your personal bot usage stats.\n💎  <b>/listprized</b> › Shows the prized items list.\n"
     if not is_vip: guide += "⭐  <b>/requestvip</b> › Request a ticket for VIP status.\n"
     if is_vip: guide += "🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles VIP notifications.\n⏹️  <b>/stop</b> › Stops the VIP tracker completely.\n"
     guide += "✨  <b>/update</b> › Restarts your session to the latest bot version.\n\n"
-    if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n🤖  <b>/approvebot</b> <code>[code]</code> › Approves a bot creation request.\n🕒  <b>/uptime</b> › Shows the bot's current running time.\n📢  <b>/broadcast</b> <code>[msg]</code> › Send a message to all users.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n🎟️  <b>/access</b> <code>[ticket]</code> › Grants VIP using a ticket code.\n⏳  <b>/extendvip</b> <code>[id] [days]</code> › Extends a user's VIP.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/restart</b> › Restarts the bot process.\n"
-    if user.id == BOT_OWNER_ID: guide += "\n<b><u>🔒 Owner Command</u></b>\n<code>/updatecode</code> › Reply to code to update bot."
+    if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n🤖  <b>/approvebot</b> <code>[code]</code> › Approves a new user bot.\n🕒  <b>/uptime</b> › Shows the bot's current running time.\n📢  <b>/broadcast</b> <code>[msg]</code> › Send a message to all users.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n🎟️  <b>/access</b> <code>[ticket]</code> › Grants VIP using a ticket code.\n⏳  <b>/extendvip</b> <code>[id] [days]</code> › Extends a user's VIP.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/restart</b> › Restarts the bot process.\n"
     await update.message.reply_text(guide, parse_mode=ParseMode.HTML)
 async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -773,8 +734,6 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(user.id) in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(str(user.id), '1970-01-01T00:00:00+00:00')) > datetime.now(pytz.utc):
         vip_exp_date = datetime.fromisoformat(VIP_USERS[str(user.id)])
         status_line = f"<b>Status:</b> ⭐ VIP (Expires: {vip_exp_date.strftime('%B %d, %Y')})"
-    if user.id in BOT_CREATORS:
-        status_line += " | 🤖 Bot Creator"
     
     stats_message += status_line
     await update.message.reply_html(stats_message)
@@ -810,22 +769,37 @@ async def send_welcome_video(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         if 'filename' in locals() and os.path.exists(filename): os.remove(filename)
 
 def main():
-    if not TOKEN or not BOT_OWNER_ID: logger.critical("Required environment variables are not set!"); return
+    if not TOKEN or not BOT_OWNER_ID: logger.critical("Main bot TOKEN and BOT_OWNER_ID are not set!"); return
     load_all_data()
     Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': int(os.environ.get('PORT', 8080))}, daemon=True).start()
     
     application = Application.builder().token(TOKEN).build()
     
+    # Add approved child bots to the application instance
+    for bot_token, bot_data in CHILD_BOTS.items():
+        logger.info(f"Registering child bot: {bot_data['name']} (@{bot_data['username']})")
+        try:
+            application.add_bot(Bot(token=bot_token))
+        except Exception as e:
+            logger.error(f"Failed to register child bot @{bot_data['username']} with token {bot_token[:8]}...: {e}")
+
+    # Register all handlers. They will apply to the main bot and all child bots.
     # User Commands
-    application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("next", next_cmd)); application.add_handler(CommandHandler("createbot", create_bot_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd)); application.add_handler(CommandHandler("stats", stats_cmd)); application.add_handler(CommandHandler("requestvip", requestvip_cmd))
+    user_commands = ["start", "stop", "refresh", "next", "registerbot", "help", "mute", "unmute", "recent", "listprized", "update", "stats", "requestvip"]
+    user_handlers = [CommandHandler(cmd, globals()[f"{cmd}_cmd"]) for cmd in user_commands]
+    application.add_handlers(user_handlers)
+    
     # Admin Commands
-    application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("approvebot", approve_bot_cmd)); application.add_handler(CommandHandler("uptime", uptime_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("restart", restart_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd)); application.add_handler(CommandHandler("extendvip", extendvip_cmd)); application.add_handler(CommandHandler("access", access_cmd)); application.add_handler(CommandHandler("addcommand", addcommand_cmd)); application.add_handler(CommandHandler("delcommand", delcommand_cmd)); application.add_handler(CommandHandler("listcommands", listcommands_cmd))
-    # Handlers
+    admin_commands = ["admin", "approvebot", "uptime", "approve", "addadmin", "msg", "adminlist", "addprized", "delprized", "restart", "broadcast", "extendvip", "access", "addcommand", "delcommand", "listcommands"]
+    admin_handlers = [CommandHandler(cmd, globals()[f"{cmd}_cmd"]) for cmd in admin_commands]
+    application.add_handlers(admin_handlers)
+    
+    # Other Handlers
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     application.add_handler(MessageHandler(filters.REPLY, reply_handler))
     
     application.job_queue.run_once(check_for_updates, 5)
-    logger.info(f"Bot [v{BOT_VERSION}] is running...")
+    logger.info(f"Bot Factory [v{BOT_VERSION}] is running with {len(application.bots)} bot(s)...")
     application.run_polling()
 
 if __name__ == '__main__':
