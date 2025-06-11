@@ -25,7 +25,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN') # Token for the main "Hub" bot
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '13.0.2') # Startup Fix
+BOT_VERSION = os.environ.get('BOT_VERSION', '13.0.3') # Final Startup Fix
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 BOT_CREATOR_NAME = os.environ.get('BOT_CREATOR_NAME', 'Sunnel')
 
@@ -795,7 +795,11 @@ def main():
     user_handlers = [CommandHandler(cmd.replace('_', ''), globals()[f"{cmd}_cmd"]) for cmd in user_commands]
     application.add_handlers(user_handlers)
     
-    admin_commands = ["admin", "approve_bot", "uptime", "approve", "addadmin", "msg", "adminlist", "addprized", "delprized", "restart", "broadcast", "extendvip", "access", "addcommand", "delcommand", "listcommands"]
+    admin_commands = [
+        "admin", "approve_bot", "uptime", "approve", "add_admin", "msg", 
+        "adminlist", "addprized", "delprized", "restart", "broadcast", 
+        "extendvip", "access", "addcommand", "delcommand", "listcommands"
+    ]
     admin_handlers = [CommandHandler(cmd.replace('_', ''), globals()[f"{cmd}_cmd"]) for cmd in admin_commands]
     application.add_handlers(admin_handlers)
     
