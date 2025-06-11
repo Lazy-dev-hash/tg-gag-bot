@@ -25,10 +25,9 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '12.0.4') # Final Restock & Weather Update
+BOT_VERSION = os.environ.get('BOT_VERSION', '12.0.5') # CreateBot Feature & Final Aesthetics
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
-RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
-RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
+BOT_CREATOR_NAME = os.environ.get('BOT_CREATOR_NAME', 'Sunnel') # Name for the /createbot signature
 
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
 API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
@@ -38,8 +37,9 @@ UPDATE_GIF_URL = "https://i.pinimg.com/originals/e5/22/07/e52207b837755b763b65b6
 WELCOME_VIDEO_URL = "https://youtu.be/VaSazPeDOTM"
 DATA_DIR = "/data"
 
+# --- GLOBAL STATE ---
 ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
-AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS = set(), set(), set(), set(), set()
+AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS, BOT_CREATORS = set(), set(), set(), set(), set(), set()
 LAST_KNOWN_VERSION, USER_INFO_CACHE, VIP_USERS, VIP_REQUESTS, CUSTOM_COMMANDS = "", {}, {}, {}, {}
 BOT_START_TIME = datetime.now(pytz.utc)
 PHT = pytz.timezone('Asia/Manila')
@@ -72,10 +72,11 @@ def save_to_file(filename, data_set):
     with open(filepath, 'w') as f:
         for item in data_set: f.write(f"{item}\n")
 def load_all_data():
-    global AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS, LAST_KNOWN_VERSION, VIP_USERS, CUSTOM_COMMANDS, VIP_REQUESTS, USER_INFO_CACHE
+    global AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS, LAST_KNOWN_VERSION, VIP_USERS, CUSTOM_COMMANDS, VIP_REQUESTS, USER_INFO_CACHE, BOT_CREATORS
     AUTHORIZED_USERS = load_int_set_from_file("authorized_users.txt"); ADMIN_USERS = load_int_set_from_file("admins.txt")
     BANNED_USERS = load_int_set_from_file("banned_users.txt"); RESTRICTED_USERS = load_int_set_from_file("restricted_users.txt")
     PRIZED_ITEMS = load_set_from_file("prized_items.txt") or {"master sprinkler", "beanstalk", "advanced sprinkler", "godly sprinkler", "ember lily"}
+    BOT_CREATORS = load_int_set_from_file("bot_creators.txt")
     if BOT_OWNER_ID: AUTHORIZED_USERS.add(BOT_OWNER_ID); ADMIN_USERS.add(BOT_OWNER_ID)
     VIP_USERS = load_json_from_file("vips.json")
     USER_INFO_CACHE = load_json_from_file("user_info.json")
@@ -84,7 +85,7 @@ def load_all_data():
     version_path = os.path.join(DATA_DIR, "version.txt")
     if os.path.exists(version_path):
         with open(version_path, 'r') as f: LAST_KNOWN_VERSION = f.read().strip()
-    logger.info(f"Loaded {len(AUTHORIZED_USERS)} users, {len(ADMIN_USERS)} admins. Loaded {len(PRIZED_ITEMS)} prized items. Loaded {len(VIP_USERS)} VIPs. Loaded {len(CUSTOM_COMMANDS)} custom commands.")
+    logger.info(f"Loaded {len(AUTHORIZED_USERS)} users, {len(ADMIN_USERS)} admins, {len(BOT_CREATORS)} bot creators. Loaded {len(PRIZED_ITEMS)} prized items. Loaded {len(VIP_USERS)} VIPs. Loaded {len(CUSTOM_COMMANDS)} custom commands.")
 
 async def log_user_activity(user: User, command: str, bot: Bot):
     if not user: return
@@ -126,33 +127,25 @@ def format_timedelta(td: timedelta, short=False) -> str:
     if not short or not parts: parts.append(f"{seconds}s")
     return " ".join(parts) if parts else "0s"
 def calculate_next_restock_times() -> dict[str, datetime]:
-    now = get_ph_time()
-    next_times = {}
-    
-    next_5_min = now.replace(second=0, microsecond=0)
-    next_minute_val = (now.minute // 5 + 1) * 5
+    now = get_ph_time(); next_times = {}
+    next_5_min = now.replace(second=0, microsecond=0); next_minute_val = (now.minute // 5 + 1) * 5
     if next_minute_val >= 60: next_5_min = (next_5_min + timedelta(hours=1)).replace(minute=0)
     else: next_5_min = next_5_min.replace(minute=next_minute_val)
     next_times["Gear"] = next_times["Seed"] = next_5_min
-
     next_egg_min = now.replace(second=0, microsecond=0)
     if now.minute < 30: next_egg_min = next_egg_min.replace(minute=30)
     else: next_egg_min = (next_egg_min + timedelta(hours=1)).replace(minute=0)
     next_times["Egg"] = next_egg_min
-    
     next_times["Honey"] = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-    
-    restock_hours = [0, 7, 14, 21]
-    next_cosmetic_time = now.replace(minute=0, second=0, microsecond=0)
+    restock_hours = [0, 7, 14, 21]; next_cosmetic_time = now.replace(minute=0, second=0, microsecond=0)
     for h in restock_hours:
         if now.hour < h: next_cosmetic_time = next_cosmetic_time.replace(hour=h); break
     else: next_cosmetic_time = (next_cosmetic_time + timedelta(days=1)).replace(hour=0)
     next_times["Cosmetics"] = next_cosmetic_time
-    
     return next_times
 def format_category_message(category_name: str, items: list, restock_timer: str) -> str:
     header_emojis = {"Gear": "🛠️ 𝗚𝗲𝗮𝗿", "Seed": "🌱 𝗦𝗲𝗲𝗱𝘀", "Egg": "🥚 𝗘𝗴𝗴𝘀", "Cosmetics": "🎨 𝗖𝗼𝘀𝗺𝗲𝘁𝗶𝗰𝘀", "Honey": "🍯 𝗛𝗼𝗻𝗲𝘆"}
-    header = f"{header_emojis.get(category_name, '📦')} — 𝗦𝘁𝗼𝗰𝗸"
+    header = f"{header_emojis.get(category_name, '📦 Stock')}"
     item_list = "\n".join([f"• {add_emoji(i['name'])}: {format_value(i['value'])}" for i in items]) if items else "<i>No items currently in stock.</i>"
     return f"<b>{header}</b>\n\n{item_list}\n\n⏳ Restock In: {restock_timer}"
 def format_weather_message(weather_data: dict) -> str:
@@ -173,15 +166,7 @@ async def fetch_all_data() -> dict | None:
             stock_res, weather_res = await asyncio.gather(client.get(API_STOCK_URL), client.get(API_WEATHER_URL))
             stock_res.raise_for_status(); weather_res.raise_for_status()
             stock_data_raw, weather_data_raw = stock_res.json()['data'], weather_res.json()
-            
-            all_data = {
-                "stock": {},
-                "weather": {
-                    "name": weather_data_raw.get("currentWeather", "Unknown"),
-                    "icon": weather_data_raw.get("icon", "❓"),
-                    "cropBonuses": weather_data_raw.get("cropBonuses", "None")
-                }
-            }
+            all_data = {"stock": {}, "weather": {"name": weather_data_raw.get("currentWeather", "Unknown"), "icon": weather_data_raw.get("icon", "❓"), "cropBonuses": weather_data_raw.get("cropBonuses", "None")}}
             for cat, details in stock_data_raw.items():
                 if 'items' in details: all_data["stock"][cat.capitalize()] = [{'name': item['name'], 'value': int(item['quantity'])} for item in details.get('items', [])]
             return all_data
@@ -337,22 +322,73 @@ async def next_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     schedule_lines = []
     category_emojis = {"Seed": "🌱", "Gear": "🛠️", "Egg": "🥚", "Honey": "🍯", "Cosmetics": "🎨"}
-
     ordered_categories = ["Seed", "Gear", "Egg", "Honey", "Cosmetics"]
 
     for category in ordered_categories:
         if category in next_times:
             next_time = next_times[category]
             time_left = next_time - now
-            
             emoji = category_emojis.get(category, "❓")
             time_str = next_time.strftime('%I:%M:%S %p')
             countdown_str = format_timedelta(time_left, short=True)
-            
             schedule_lines.append(f"{emoji} <b>{category}:</b> <code>{time_str}</code> (in {countdown_str})")
 
     message = "🗓️ <b>Next Restock Schedule</b>\n<i>(Philippine Time, PHT)</i>\n\n" + "\n".join(schedule_lines)
     await update.message.reply_html(message)
+async def create_bot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    await log_user_activity(user, "/createbot", context.bot)
+
+    if user.id in BOT_CREATORS:
+        await update.message.reply_html("✨ You've already established your bot's presence! Your creation is recognized across the network.")
+        return
+
+    # Define requirements
+    REQUIRED_DAYS = 14
+    REQUIRED_COMMANDS = 50
+
+    # Check requirements
+    is_vip = str(user.id) in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(str(user.id), '1970-01-01T00:00:00+00:00')) > datetime.now(pytz.utc)
+    user_info = USER_INFO_CACHE.get(str(user.id), {})
+    command_count = user_info.get('command_count', 0)
+    approved_date_str = user_info.get('approved_date')
+    
+    days_since_approval = -1
+    if approved_date_str:
+        approved_date = datetime.fromisoformat(approved_date_str)
+        days_since_approval = (datetime.now(pytz.utc) - approved_date).days
+
+    # Build Requirement Status
+    req_vip_ok = is_vip
+    req_days_ok = days_since_approval >= REQUIRED_DAYS
+    req_commands_ok = command_count >= REQUIRED_COMMANDS
+    all_reqs_met = req_vip_ok and req_days_ok and req_commands_ok
+
+    if not all_reqs_met:
+        status_lines = [
+            f"{'✅' if req_vip_ok else '❌'} <b>VIP Status:</b> {'Active' if req_vip_ok else 'Inactive'}",
+            f"{'✅' if req_days_ok else '❌'} <b>Membership Duration:</b> {days_since_approval if days_since_approval != -1 else 0} / {REQUIRED_DAYS} days",
+            f"{'✅' if req_commands_ok else '❌'} <b>Command Usage:</b> {command_count} / {REQUIRED_COMMANDS} commands used"
+        ]
+        message = "🛠️ <b>Bot Creation Requirements</b>\n\nYou haven't met all the requirements to create a bot yet. Here is your progress:\n\n" + "\n".join(status_lines)
+        await update.message.reply_html(message)
+        return
+
+    # If all requirements are met
+    BOT_CREATORS.add(user.id)
+    save_to_file("bot_creators.txt", BOT_CREATORS)
+    
+    success_message = (
+        f"🎉 <b>Bot Creation Successful!</b> 🎉\n\n"
+        f"Congratulations, {user.first_name}! Your request has been processed and your bot instance is now active.\n\n"
+        f"📜 <u>Official Certificate</u> 📜\n"
+        f"<b>Bot Name:</b> {user.first_name}'s GAG Assistant\n"
+        f"<b>Instance ID:</b> <code>GAG-{user.id}-{random.randint(1000, 9999)}</code>\n"
+        f"<b>Status:</b> <pre>ONLINE</pre>\n\n"
+        f"<i>This bot was created by <b>{BOT_CREATOR_NAME}</b>.</i>"
+    )
+    await update.message.reply_html(success_message)
 
 # --- ADMIN COMMANDS ---
 async def uptime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -659,7 +695,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id not in AUTHORIZED_USERS: await update.message.reply_text("You need to be approved to use this bot. Send /start to begin the approval process."); return
     await log_user_activity(user, "/help", context.bot)
     is_vip = str(user.id) in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(str(user.id), '1970-01-01T00:00:00+00:00')) > datetime.now(pytz.utc)
-    guide = f"📘 <b>GAG Stock Alerter Guide</b> (v{BOT_VERSION})\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › " + ("Starts VIP background tracking." if is_vip else "Shows current stock.") + "\n🔄  <b>/refresh</b> › Manually shows current stock.\n🗓️  <b>/next</b> › Shows the next restock schedule.\n📈  <b>/recent</b> › Shows recent items.\n📊  <b>/stats</b> › View your personal bot usage stats.\n💎  <b>/listprized</b> › Shows the prized items list.\n"
+    guide = f"📘 <b>GAG Stock Alerter Guide</b> (v{BOT_VERSION})\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › " + ("Starts VIP background tracking." if is_vip else "Shows current stock.") + "\n🔄  <b>/refresh</b> › Manually shows current stock.\n🗓️  <b>/next</b> › Shows the next restock schedule.\n🤖  <b>/createbot</b> › Attain 'Bot Creator' status.\n📈  <b>/recent</b> › Shows recent items.\n📊  <b>/stats</b> › View your personal bot usage stats.\n💎  <b>/listprized</b> › Shows the prized items list.\n"
     if not is_vip: guide += "⭐  <b>/requestvip</b> › Request a ticket for VIP status.\n"
     if is_vip: guide += "🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles VIP notifications.\n⏹️  <b>/stop</b> › Stops the VIP tracker completely.\n"
     guide += "✨  <b>/update</b> › Restarts your session to the latest bot version.\n\n"
@@ -698,11 +734,15 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         approved_date = datetime.fromisoformat(approved_date_str)
         days_since = (datetime.now(pytz.utc) - approved_date).days
         stats_message += f"<b>Member Since:</b> {approved_date.strftime('%B %d, %Y')} ({days_since} days ago)\n"
+    
+    status_line = "<b>Status:</b> ✅ Standard User"
     if str(user.id) in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(str(user.id), '1970-01-01T00:00:00+00:00')) > datetime.now(pytz.utc):
         vip_exp_date = datetime.fromisoformat(VIP_USERS[str(user.id)])
-        stats_message += f"<b>Status:</b> ⭐ VIP (Expires: {vip_exp_date.strftime('%B %d, %Y')})"
-    else:
-        stats_message += "<b>Status:</b> ✅ Standard User"
+        status_line = f"<b>Status:</b> ⭐ VIP (Expires: {vip_exp_date.strftime('%B %d, %Y')})"
+    if user.id in BOT_CREATORS:
+        status_line += " | 🤖 Bot Creator"
+    
+    stats_message += status_line
     await update.message.reply_html(stats_message)
 async def check_for_updates(application: Application):
     global LAST_KNOWN_VERSION
@@ -743,7 +783,7 @@ def main():
     application = Application.builder().token(TOKEN).build()
     
     # User Commands
-    application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("next", next_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd)); application.add_handler(CommandHandler("stats", stats_cmd)); application.add_handler(CommandHandler("requestvip", requestvip_cmd))
+    application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("next", next_cmd)); application.add_handler(CommandHandler("createbot", create_bot_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd)); application.add_handler(CommandHandler("stats", stats_cmd)); application.add_handler(CommandHandler("requestvip", requestvip_cmd))
     # Admin Commands
     application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("uptime", uptime_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("restart", restart_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd)); application.add_handler(CommandHandler("extendvip", extendvip_cmd)); application.add_handler(CommandHandler("access", access_cmd)); application.add_handler(CommandHandler("addcommand", addcommand_cmd)); application.add_handler(CommandHandler("delcommand", delcommand_cmd)); application.add_handler(CommandHandler("listcommands", listcommands_cmd))
     # Handlers
