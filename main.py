@@ -25,10 +25,10 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN') # Token for the main "Hub" bot
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '14.0.0') # Auto-Activation & Final Features
+BOT_VERSION = os.environ.get('BOT_VERSION', '14.0.1') # Final Stability Patch
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 BOT_CREATOR_NAME = os.environ.get('BOT_CREATOR_NAME', 'Sunnel')
-RENDER_DEPLOY_HOOK_URL = os.environ.get('RENDER_DEPLOY_HOOK_URL') # New: For the /deploy command
+RENDER_DEPLOY_HOOK_URL = os.environ.get('RENDER_DEPLOY_HOOK_URL')
 
 API_STOCK_URL = "https://gagstock.gleeze.com/grow-a-garden"
 API_WEATHER_URL = "https://growagardenstock.com/api/stock/weather"
@@ -265,7 +265,8 @@ async def send_full_stock_report(update: Update, context: ContextTypes.DEFAULT_T
     
     if update.effective_chat.id in SENT_MESSAGES:
         for msg_id in SENT_MESSAGES[update.effective_chat.id]:
-            try: await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
+            try:
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
             except Exception: pass
         SENT_MESSAGES[update.effective_chat.id].clear()
     else:
@@ -320,7 +321,6 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await log_user_activity(user, "/start", context.bot)
     if user.id in BANNED_USERS: await update.message.reply_text("❌ You have been banned from using this bot."); return
     if user.id not in AUTHORIZED_USERS:
-        # This part will likely only be triggered on your main bot
         code = "GAG-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=3)) + '-' + ''.join(random.choices(string.ascii_uppercase + string.digits, k=3))
         user_msg = f"👋 <b>Welcome! This is a private bot.</b>\n\nTo get access, send this code to the admin for approval:\n\n🔑 Approval Code: <code>{code}</code>"
         admin_msg = f"👤 <b>New User Request</b>\n\n<b>Name:</b> {user.first_name}\n<b>User ID:</b> <code>{user.id}</code>\n\nTo approve, use: <code>/approve {user.id}</code>"
@@ -394,21 +394,8 @@ async def register_bot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for admin_id in ADMIN_USERS:
         try: await context.application.bot.send_message(chat_id=admin_id, text=admin_msg, parse_mode=ParseMode.HTML)
         except Exception as e: logger.error(f"Failed to send bot reg notice to admin {admin_id}: {e}")
-# ... (rest of command handlers are unchanged and omitted for brevity) ...
 
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if user.id in BANNED_USERS: return
-    if user.id not in AUTHORIZED_USERS: await update.message.reply_text("You need to be approved to use this bot. Send /start to begin the approval process."); return
-    await log_user_activity(user, "/help", context.bot)
-    is_vip = str(user.id) in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(str(user.id), '1970-01-01T00:00:00+00:00')) > datetime.now(pytz.utc)
-    guide = f"📘 <b>GAG Stock Alerter Guide</b> (v{BOT_VERSION})\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › " + ("Starts VIP background tracking." if is_vip else "Shows current stock.") + "\n🔄  <b>/refresh</b> › Manually shows current stock.\n🗓️  <b>/next</b> › Shows the next restock schedule.\n🤖  <b>/registerbot</b> <code>[token] [name]</code> › Register your own bot (VIP Only).\n📈  <b>/recent</b> › Shows recent items.\n📊  <b>/stats</b> › View your personal bot usage stats.\n💎  <b>/listprized</b> › Shows the prized items list.\n"
-    if not is_vip: guide += "⭐  <b>/requestvip</b> › Request a ticket for VIP status.\n"
-    if is_vip: guide += "🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles VIP notifications.\n⏹️  <b>/stop</b> › Stops the VIP tracker completely.\n\n"
-    if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n🤖  <b>/approvebot</b> <code>[code]</code> › Approves a new user bot.\n🚀  <b>/deploy</b> › Triggers a new deployment on Render.\n🕒  <b>/uptime</b> › Shows the bot's current running time.\n📢  <b>/broadcast</b> <code>[msg]</code> › Send a message to all users.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n🎟️  <b>/access</b> <code>[ticket]</code> › Grants VIP using a ticket code.\n⏳  <b>/extendvip</b> <code>[id] [days]</code> › Extends a user's VIP.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/restart</b> › Restarts the bot process.\n"
-    await update.message.reply_html(guide)
-
-# --- NEW & UPDATED ADMIN COMMANDS ---
+# --- ADMIN COMMANDS ---
 async def approve_bot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
     if admin.id not in ADMIN_USERS: return
@@ -461,46 +448,383 @@ async def deploy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ <b>Deployment Failed</b>\n\nRender responded with status {e.response.status_code}. Check your Render dashboard and deploy hook URL.")
     except Exception as e:
         await msg.edit_text(f"❌ <b>An Error Occurred</b>\n\nCould not trigger deployment. Error: {e}")
-async def self_update_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def uptime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id not in ADMIN_USERS: return
+    await log_user_activity(user, "/uptime", context.bot)
+    uptime_delta = datetime.now(pytz.utc) - BOT_START_TIME
+    uptime_str = format_timedelta(uptime_delta)
+    await update.message.reply_html(f"🕒 <b>Bot Uptime:</b> {uptime_str}")
+async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id not in ADMIN_USERS: return
+    await log_user_activity(user, "/admin", context.bot)
+    base_url = os.environ.get('RENDER_EXTERNAL_URL', f'http://localhost:{os.environ.get("PORT", 8080)}')
+    dashboard_url = f"{base_url}/login"
+    keyboard = [[InlineKeyboardButton("🌐 Open Dashboard", url=dashboard_url)],[InlineKeyboardButton("👤 Manage Authorized", callback_data='admin_users_0')],[InlineKeyboardButton("⚠️ Manage Restricted", callback_data='admin_restricted_0')],[InlineKeyboardButton("🚫 Manage Banned", callback_data='admin_banned_0')],[InlineKeyboardButton("💎 Prized Items", callback_data='admin_prized')],[InlineKeyboardButton("📊 Bot Stats", callback_data='admin_stats')],[InlineKeyboardButton("📢 Broadcast Message", callback_data='admin_broadcast')],[InlineKeyboardButton("❌ Close", callback_data='admin_close')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    message_to_use = update.message
+    if hasattr(update, 'callback_query') and update.callback_query:
+        message_to_use = update.callback_query.message
+        try: await message_to_use.edit_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+        except Exception as e:
+            logger.warning(f"Could not edit message for admin panel, sending new one. Error: {e}")
+            await context.bot.send_message(chat_id=user.id, text=f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action.", reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+    else: await message_to_use.reply_html(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action.", reply_markup=reply_markup)
+async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
-    user = query.from_user
-    
-    tracker_info = ACTIVE_TRACKERS.get(user.id)
-    if not tracker_info:
-        await query.message.edit_text("Your session has already ended. Please use /start to begin a new one.")
+    admin_id = query.from_user.id
+    if admin_id not in ADMIN_USERS: await query.edit_message_text("❌ You are not authorized for this action."); return
+    data = query.data.split('_'); command = data[0]
+    if command != "admin": return
+    action = data[1]
+    if action == "main": await admin_cmd(update, context); return
+    if action == "close": await query.delete_message(); return
+
+    list_map = {"banned": {"title": "🚫 Banned Users", "data": BANNED_USERS},"restricted": {"title": "⚠️ Restricted Users", "data": RESTRICTED_USERS},"users": {"title": "👤 Authorized Users", "data": AUTHORIZED_USERS}}
+    if action in list_map:
+        page = int(data[2]); users_per_page = 5; config = list_map[action]; user_list = sorted(list(config["data"]))
+        start_index, end_index = page * users_per_page, page * users_per_page + users_per_page
+        keyboard = []
+        if not user_list: keyboard.append([InlineKeyboardButton("This list is empty.", callback_data="admin_noop")])
+        else:
+            for uid in user_list[start_index:end_index]:
+                user_info = USER_INFO_CACHE.get(str(uid), {'first_name': f'User {uid}', 'username': 'N/A'})
+                text = f"{user_info['first_name']} (@{user_info['username']})"
+                keyboard.append([InlineKeyboardButton(text, callback_data=f"admin_user_manage_{uid}")])
+        pagination_row = []
+        if page > 0: pagination_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_{action}_{page-1}"))
+        if end_index < len(user_list): pagination_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"admin_{action}_{page+1}"))
+        if pagination_row: keyboard.append(pagination_row)
+        keyboard.append([InlineKeyboardButton("⬅️ Back to Main Menu", callback_data='admin_main')])
+        await query.edit_message_text(f"<b>{config['title']}</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
         return
+    if action == "user":
+        action_type = data[2]; target_id = int(data[3])
+        if action_type == "manage":
+            user_info = USER_INFO_CACHE.get(str(target_id), {'first_name': f'User {target_id}', 'username': 'N/A'})
+            status, status_icon = "Active", "✅"
+            if target_id in BANNED_USERS: status, status_icon = "Banned", "🚫"
+            elif target_id in RESTRICTED_USERS: status, status_icon = "Restricted", "⚠️"
+            elif target_id in ADMIN_USERS: status, status_icon = "Admin", "👑"
+            if str(target_id) in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(str(target_id), '1970-01-01T00:00:00+00:00')) > datetime.now(pytz.utc): status += " (VIP)"
+            keyboard = [[InlineKeyboardButton("✅ Unban" if target_id in BANNED_USERS else "🚫 Ban", callback_data=f"admin_user_unban_{target_id}" if target_id in BANNED_USERS else f"admin_user_ban_{target_id}")],[InlineKeyboardButton("✅ Unrestrict" if target_id in RESTRICTED_USERS else "⚠️ Restrict", callback_data=f"admin_user_unrestrict_{target_id}" if target_id in RESTRICTED_USERS else f"admin_user_restrict_{target_id}")],[InlineKeyboardButton("Demote" if target_id in ADMIN_USERS else "👑 Promote", callback_data=f"admin_user_deladmin_{target_id}" if target_id in ADMIN_USERS else f"admin_user_addadmin_{target_id}")],[InlineKeyboardButton("⬅️ Back to Main Menu", callback_data='admin_main')]]
+            await query.edit_message_text(f"<b>Managing:</b> {user_info['first_name']}\n<b>ID:</b> <code>{target_id}</code>\n<b>Status:</b> {status_icon} {status}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+            return
+        if target_id == BOT_OWNER_ID: await query.edit_message_text("❌ This action cannot be performed on the bot owner."); return
+        text = ""
+        if action_type == "ban": BANNED_USERS.add(target_id); AUTHORIZED_USERS.discard(target_id); RESTRICTED_USERS.discard(target_id); VIP_USERS.pop(str(target_id), None); save_to_file("banned_users.txt", BANNED_USERS); save_to_file("authorized_users.txt", AUTHORIZED_USERS); save_to_file("restricted_users.txt", RESTRICTED_USERS); save_json_to_file("vips.json", VIP_USERS); text = f"🚫 User {target_id} has been banned."
+        elif action_type == "unban": BANNED_USERS.discard(target_id); AUTHORIZED_USERS.add(target_id); save_to_file("banned_users.txt", BANNED_USERS); save_to_file("authorized_users.txt", AUTHORIZED_USERS); text = f"✅ User {target_id} has been unbanned."
+        elif action_type == "restrict": RESTRICTED_USERS.add(target_id); save_to_file("restricted_users.txt", RESTRICTED_USERS); text = f"⚠️ User {target_id} is now restricted."
+        elif action_type == "unrestrict": RESTRICTED_USERS.discard(target_id); save_to_file("restricted_users.txt", RESTRICTED_USERS); text = f"✅ User {target_id} is no longer restricted."
+        elif action_type == "addadmin": ADMIN_USERS.add(target_id); save_to_file("admins.txt", ADMIN_USERS); text = f"👑 User {target_id} is now an admin."
+        elif action_type == "deladmin": ADMIN_USERS.discard(target_id); save_to_file("admins.txt", ADMIN_USERS); text = f"User {target_id} is no longer an admin."
+        await query.edit_message_text(text); await asyncio.sleep(2); await admin_cmd(update, context)
+        return
+    if action == "stats":
+        uptime_delta = datetime.now(pytz.utc) - BOT_START_TIME
+        uptime_str = format_timedelta(uptime_delta)
+        text = f"📊 <b>Bot Statistics</b>\n\n- <b>Uptime:</b> {uptime_str}\n- <b>Authorized Users:</b> {len(AUTHORIZED_USERS)}\n- <b>VIP Members:</b> {len([uid for uid, exp in VIP_USERS.items() if datetime.fromisoformat(exp) > datetime.now(pytz.utc)])}\n- <b>Admins:</b> {len(ADMIN_USERS)}\n- <b>Active Trackers:</b> {len(ACTIVE_TRACKERS)}\n- <b>Banned Users:</b> {len(BANNED_USERS)}\n- <b>Restricted Users:</b> {len(RESTRICTED_USERS)}\n- <b>Recent Activities Logged:</b> {len(USER_ACTIVITY)}"
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data='admin_main')]]), parse_mode=ParseMode.HTML)
+    elif action == "prized":
+        message = "💎 <b>Current Prized Items:</b>\n\n" + ("\n".join([f"• <code>{item}</code>" for item in sorted(list(PRIZED_ITEMS))]) or "The list is empty.")
+        await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data='admin_main')]]), parse_mode=ParseMode.HTML)
+    elif action == "broadcast":
+        await query.message.reply_text("Please use the command: <code>/broadcast [your message]</code>", parse_mode=ParseMode.HTML)
+async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user;
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, f"/approve", context.bot)
+    try:
+        target_id = int(context.args[0])
+        if target_id in AUTHORIZED_USERS: await update.message.reply_text("This user is already authorized."); return
+        AUTHORIZED_USERS.add(target_id); save_to_file("authorized_users.txt", AUTHORIZED_USERS)
+        
+        user_id_str = str(target_id)
+        if user_id_str not in USER_INFO_CACHE: USER_INFO_CACHE[user_id_str] = {}
+        USER_INFO_CACHE[user_id_str]['approved_date'] = datetime.now(pytz.utc).isoformat()
+        save_json_to_file("user_info.json", USER_INFO_CACHE)
 
-    await query.message.edit_text("⚙️ Updating your session... Please wait.")
-    tracker_info['task'].cancel()
-    
-    # Simulate the user running /start again to get the new version
-    mock_chat = type('MockChat', (), {'id': user.id, 'type': 'private'})()
-    # To call reply_text, we need a message object. We can mock it.
-    mock_message = type('MockMessage', (), {
-        'from_user': user, 'chat': mock_chat, 
-        'reply_text': query.message.reply_text, 
-        'reply_html': query.message.reply_html,
-        'delete': query.message.delete
-    })()
-    mock_update = type('MockUpdate', (), {'effective_user': user, 'message': mock_message, 'effective_chat': mock_chat})()
-    
-    await start_cmd(mock_update, ContextTypes.DEFAULT_TYPE(application=context.application, chat_id=user.id, user_id=user.id))
-    await query.message.delete()
+        try:
+            target_user = await context.bot.get_chat(target_id)
+            await log_user_activity(target_user, "[Approved]", context.bot)
+        except Exception as e: logger.error(f"Could not get chat for newly approved user {target_id}: {e}")
+        await update.message.reply_text(f"✅ User <code>{target_id}</code> has been authorized!", parse_mode=ParseMode.HTML)
+        await context.bot.send_message(chat_id=target_id, text="🎉 <b>You have been approved!</b>\n\nYou can now use the bot's commands. See /help for details.")
+        await send_welcome_video(context, target_id)
+    except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/approve [user_id]</code>", parse_mode=ParseMode.HTML)
+    except Exception as e: await update.message.reply_text(f"❌ Error approving user: {e}")
+async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user;
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, f"/addadmin", context.bot)
+    try:
+        target_id = int(context.args[0])
+        if target_id in ADMIN_USERS: await update.message.reply_text("This user is already an admin."); return
+        ADMIN_USERS.add(target_id); save_to_file("admins.txt", ADMIN_USERS)
+        if target_id not in AUTHORIZED_USERS: AUTHORIZED_USERS.add(target_id); save_to_file("authorized_users.txt", AUTHORIZED_USERS)
+        await update.message.reply_text(f"👑 User <code>{target_id}</code> is now an admin!", parse_mode=ParseMode.HTML)
+        await context.bot.send_message(chat_id=target_id, text="🛡️ <b>You have been promoted to an Admin!</b>")
+    except (IndexError, ValueError): await update.message.reply_text("Usage: <code>/addadmin [user_id]</code>", parse_mode=ParseMode.HTML)
+async def msg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user;
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, f"/msg", context.bot)
+    try:
+        if len(context.args) < 2: await update.message.reply_text("⚠️ Usage: <code>/msg [user_id] [your message]</code>", parse_mode=ParseMode.HTML); return
+        target_id, message_text = int(context.args[0]), " ".join(context.args[1:])
+        user_info = USER_INFO_CACHE.get(str(target_id), {'first_name': f"User {target_id}"})
+        message_to_user = f"✉️ <b>A message from the Bot Admin:</b>\n\n<i>{message_text}</i>\n\n\n—\n<pre>Reply to this message to talk to the admin.</pre>"
+        await context.bot.send_message(chat_id=target_id, text=message_to_user, parse_mode=ParseMode.HTML)
+        await update.message.reply_text(f"✅ Message sent successfully to {user_info['first_name']} (<code>{target_id}</code>).", parse_mode=ParseMode.HTML)
+    except (IndexError, ValueError): await update.message.reply_text("⚠️ Invalid format. Usage: <code>/msg [user_id] [your message]</code>", parse_mode=ParseMode.HTML)
+    except Exception as e: await update.message.reply_text(f"❌ Could not send message. Error: {e}")
+async def adminlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user;
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, "/adminlist", context.bot)
+    admin_list_text = "<b>🛡️ Current Bot Admins</b>\n\n"
+    for admin_id in ADMIN_USERS:
+        info = USER_INFO_CACHE.get(str(admin_id), {'first_name': f"Admin {admin_id}", 'username': 'N/A'})
+        admin_list_text += f"• {info['first_name']} (@{info['username']}) - <code>{admin_id}</code>\n"
+    await update.message.reply_html(admin_list_text)
+async def addprized_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user;
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, f"/addprized", context.bot)
+    item_name = " ".join(context.args).lower().strip()
+    if not item_name: await update.message.reply_text("Usage: <code>/addprized [item name]</code>", parse_mode=ParseMode.HTML); return
+    PRIZED_ITEMS.add(item_name); save_to_file("prized_items.txt", PRIZED_ITEMS)
+    await update.message.reply_text(f"✅ '<code>{item_name}</code>' has been added to the prized list.", parse_mode=ParseMode.HTML)
+async def delprized_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user;
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, f"/delprized", context.bot)
+    item_name = " ".join(context.args).lower().strip()
+    if not item_name: await update.message.reply_text("Usage: <code>/delprized [item name]</code>", parse_mode=ParseMode.HTML); return
+    PRIZED_ITEMS.discard(item_name); save_to_file("prized_items.txt", PRIZED_ITEMS)
+    await update.message.reply_text(f"🗑️ '<code>{item_name}</code>' has been removed from the prized list.", parse_mode=ParseMode.HTML)
+async def listprized_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    await log_user_activity(user, "/listprized", context.bot)
+    if not PRIZED_ITEMS: message = "The prized item list is currently empty."
+    else: message = "💎 <b>Current Prized Items:</b>\n\n" + "\n".join([f"• <code>{item}</code>" for item in sorted(list(PRIZED_ITEMS))])
+    await update.message.reply_html(message)
+async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, "/restart", context.bot)
+    await update.message.reply_text("🚀 Gracefully restarting the bot now...")
+    os.execv(sys.executable, ['python'] + sys.argv)
+async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, "/broadcast", context.bot)
+    message_to_send = " ".join(context.args)
+    if not message_to_send: await update.message.reply_text("Usage: <code>/broadcast [your message]</code>", parse_mode=ParseMode.HTML); return
+    broadcast_message = f"📣 <b>Broadcast from Admin:</b>\n\n<i>{message_to_send}</i>"
+    sent_count = 0
+    await update.message.reply_text(f"Sending broadcast to {len(AUTHORIZED_USERS)} users...")
+    for user_id in AUTHORIZED_USERS:
+        if user_id not in BANNED_USERS:
+            try: await context.bot.send_message(chat_id=user_id, text=broadcast_message, parse_mode=ParseMode.HTML); sent_count += 1; await asyncio.sleep(0.1)
+            except Exception as e: logger.error(f"Failed to send broadcast to {user_id}: {e}")
+    await update.message.reply_text(f"✅ Broadcast complete. Message sent to {sent_count} users.")
+async def extendvip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, "/extendvip", context.bot)
+    try:
+        if len(context.args) != 2: raise ValueError
+        target_id, days = int(context.args[0]), int(context.args[1])
+        if target_id not in AUTHORIZED_USERS: await update.message.reply_text("❌ This user must be authorized first."); return
+        current_expiration_str = VIP_USERS.get(str(target_id))
+        current_expiration = datetime.fromisoformat(current_expiration_str) if current_expiration_str else datetime.now(pytz.utc)
+        if current_expiration < datetime.now(pytz.utc): current_expiration = datetime.now(pytz.utc)
+        new_expiration = current_expiration + timedelta(days=days)
+        VIP_USERS[str(target_id)] = new_expiration.isoformat(); save_json_to_file("vips.json", VIP_USERS)
+        await update.message.reply_text(f"✅ VIP status for user <code>{target_id}</code> extended by {days} days. New expiration: {new_expiration.strftime('%B %d, %Y')}", parse_mode=ParseMode.HTML)
+        await context.bot.send_message(chat_id=target_id, text=f"🎉 Your VIP status has been extended! It now expires on {new_expiration.strftime('%B %d, %Y')}.")
+    except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/extendvip [user_id] [days]</code>", parse_mode=ParseMode.HTML)
+async def access_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, "/access", context.bot)
+    if len(context.args) != 1:
+        await update.message.reply_text("⚠️ Usage: <code>/access [ticket_code]</code>", parse_mode=ParseMode.HTML); return
+    ticket_code = context.args[0]
+    if ticket_code in VIP_REQUESTS:
+        target_id = VIP_REQUESTS[ticket_code]
+        del VIP_REQUESTS[ticket_code]; save_json_to_file("vip_requests.json", VIP_REQUESTS)
+        expiration_date = datetime.now(pytz.utc) + timedelta(days=30); VIP_USERS[str(target_id)] = expiration_date.isoformat(); save_json_to_file("vips.json", VIP_USERS)
+        user_info = USER_INFO_CACHE.get(str(target_id), {'first_name': f'User {target_id}'})
+        await update.message.reply_text(f"✅ <b>VIP Access Granted!</b>\n\nUser {user_info['first_name']} (<code>{target_id}</code>) is now a VIP until {expiration_date.strftime('%B %d, %Y')}.", parse_mode=ParseMode.HTML)
+        await context.bot.send_message(chat_id=target_id, text=f"🎉 <b>Congratulations!</b>\n\nYour VIP access has been granted and is active until {expiration_date.strftime('%B %d, %Y')}.\n\nUse /start to activate VIP tracking!")
+        await log_user_activity(admin, f"[VIP Granted for {target_id}]", context.bot)
+    else:
+        await update.message.reply_text("❌ Invalid or expired VIP ticket code.")
+async def requestvip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    await log_user_activity(user, "/requestvip", context.bot)
+    nickname = user.first_name.split(" ")[0].capitalize().replace(" ", "")
+    random_part = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    ticket_code = f"{nickname}-{random_part}"
+    VIP_REQUESTS[ticket_code] = user.id; save_json_to_file("vip_requests.json", VIP_REQUESTS)
+    user_msg = f"✨ <b>Your VIP Access Ticket is Ready!</b> ✨\n\nTo complete your request, please send the following ticket code to an admin:\n\n🎫 <b>Ticket Code:</b> <code>{ticket_code}</code>\n\n<i>(Click the code to copy it)</i>"
+    admin_msg = f"⭐ <b>New VIP Request Ticket</b>\n\n<b>User:</b> {user.full_name} (<code>{user.id}</code>)\n<b>Ticket Code:</b> <code>{ticket_code}</code>\n\nTo approve, use: <code>/access {ticket_code}</code>"
+    await update.message.reply_html(user_msg)
+    for admin_id in ADMIN_USERS:
+        try: await context.application.bot.send_message(chat_id=admin_id, text=admin_msg, parse_mode=ParseMode.HTML)
+        except Exception as e: logger.error(f"Failed to send VIP request notice to admin {admin_id}: {e}")
+async def addcommand_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, "/addcommand", context.bot)
+    try:
+        if len(context.args) < 3: raise ValueError
+        name, permission, response = context.args[0].lower(), context.args[1].lower(), " ".join(context.args[2:])
+        if not name.isalnum(): await update.message.reply_text("❌ Command name can only contain letters and numbers."); return
+        if permission not in ["user", "admin", "both"]: await update.message.reply_text("❌ Permission must be 'user', 'admin', or 'both'."); return
+        CUSTOM_COMMANDS[name] = {"response": response, "permission": permission}; save_json_to_file("custom_commands.json", CUSTOM_COMMANDS)
+        await update.message.reply_text(f"✅ Custom command `/{name}` created!\n\nUse /restart for the new command to become active.", parse_mode=ParseMode.HTML)
+    except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/addcommand [name] [permission] [response]</code>\n\n- <b>Permission</b> can be: user, admin, or both.", parse_mode=ParseMode.HTML)
+async def delcommand_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user
+    if admin.id not in ADMIN_USERS: return
+    await log_user_activity(admin, "/delcommand", context.bot)
+    try:
+        name = context.args[0].lower()
+        if name in CUSTOM_COMMANDS:
+            del CUSTOM_COMMANDS[name]; save_json_to_file("custom_commands.json", CUSTOM_COMMANDS)
+            await update.message.reply_text(f"🗑️ Custom command `/{name}` deleted.\n\nUse /restart for this change to take effect.", parse_mode=ParseMode.HTML)
+        else: await update.message.reply_text(f"❌ Command `/{name}` not found.")
+    except IndexError: await update.message.reply_text("⚠️ Usage: <code>/delcommand [name]</code>", parse_mode=ParseMode.HTML)
+async def listcommands_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id not in ADMIN_USERS: return
+    await log_user_activity(user, "/listcommands", context.bot)
+    if not CUSTOM_COMMANDS: await update.message.reply_text("There are no custom commands currently set."); return
+    message = "<b>🔧 Custom Commands List</b>\n\n" + "\n".join([f"• <code>/{name}</code> (Permission: {data['permission']})" for name, data in CUSTOM_COMMANDS.items()])
+    await update.message.reply_html(message)
 
-# --- OTHER FUNCTIONS ---
-# ... (All other command handlers like admin_cmd, approve_cmd, etc., are unchanged and included here) ...
-# ... (This includes all the `_cmd` functions from the previous version) ...
-# The full code for all of them would make this too long, but they are identical to the previous version.
-# For the sake of this example, only the new and changed functions are shown in full detail. The rest are assumed present.
+# --- USER COMMANDS & REPLY HANDLER ---
+async def recent_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user;
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    await log_user_activity(user, "/recent", context.bot)
+    chat_data = LAST_SENT_DATA.get(user.id)
+    if not chat_data or not chat_data.get("stock"): await update.message.reply_text("I don't have recent stock data. Please run /start or /refresh."); return
+    recent_items = [items[0] for items in chat_data["stock"].values() if items]
+    if not recent_items: await update.message.reply_text("The stock is completely empty right now."); return
+    message = "<b>📈 Most Recent Stock Items</b>\n\n" + "\n".join([f"• {add_emoji(i['name'])}: {format_value(i['value'])}" for i in recent_items])
+    await update.message.reply_html(message)
+async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    await log_user_activity(user, "/stop", context.bot); chat_id = user.id
+    if chat_id in ACTIVE_TRACKERS: ACTIVE_TRACKERS[chat_id]['task'].cancel(); await update.message.reply_text("🛑 Tracking stopped.")
+    else: await update.message.reply_text("⚠️ Not tracking anything.")
+async def refresh_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    await log_user_activity(user, "/refresh", context.bot); filters = ACTIVE_TRACKERS.get(user.id, {}).get('filters', [])
+    await send_full_stock_report(update, context, filters)
+async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    await log_user_activity(user, "/mute", context.bot); chat_id = user.id; tracker_info = ACTIVE_TRACKERS.get(chat_id)
+    if not tracker_info: await update.message.reply_text("⚠️ Not tracking. Use /start first."); return
+    if tracker_info.get('is_muted'): await update.message.reply_text("Notifications already muted.")
+    else: tracker_info['is_muted'] = True; await update.message.reply_text("🔇 Notifications muted. Use /unmute to resume.")
+async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    await log_user_activity(user, "/unmute", context.bot); chat_id = user.id; tracker_info = ACTIVE_TRACKERS.get(chat_id)
+    if not tracker_info: await update.message.reply_text("⚠️ Not tracking. Use /start first."); return
+    if not tracker_info.get('is_muted'): await update.message.reply_text("Notifications already on.")
+    else: tracker_info['is_muted'] = False; await update.message.reply_text("🔊 Notifications resumed!")
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS: return
+    if user.id not in AUTHORIZED_USERS: await update.message.reply_text("You need to be approved to use this bot. Send /start to begin the approval process."); return
+    await log_user_activity(user, "/help", context.bot)
+    is_vip = str(user.id) in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(str(user.id), '1970-01-01T00:00:00+00:00')) > datetime.now(pytz.utc)
+    guide = f"📘 <b>GAG Stock Alerter Guide</b> (v{BOT_VERSION})\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › " + ("Starts VIP background tracking." if is_vip else "Shows current stock.") + "\n🔄  <b>/refresh</b> › Manually shows current stock.\n🗓️  <b>/next</b> › Shows the next restock schedule.\n🤖  <b>/registerbot</b> <code>[token] [name]</code> › Register your own bot (VIP Only).\n📈  <b>/recent</b> › Shows recent items.\n📊  <b>/stats</b> › View your personal bot usage stats.\n💎  <b>/listprized</b> › Shows the prized items list.\n"
+    if not is_vip: guide += "⭐  <b>/requestvip</b> › Request a ticket for VIP status.\n"
+    if is_vip: guide += "🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles VIP notifications.\n⏹️  <b>/stop</b> › Stops the VIP tracker completely.\n\n"
+    if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n🤖  <b>/approvebot</b> <code>[code]</code> › Approves a new user bot.\n🚀  <b>/deploy</b> › Triggers a new deployment on Render.\n🕒  <b>/uptime</b> › Shows the bot's current running time.\n📢  <b>/broadcast</b> <code>[msg]</code> › Send a message to all users.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n🎟️  <b>/access</b> <code>[ticket]</code> › Grants VIP using a ticket code.\n⏳  <b>/extendvip</b> <code>[id] [days]</code> › Extends a user's VIP.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/restart</b> › Restarts the bot process.\n"
+    await update.message.reply_html(guide)
+async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    if update.message.reply_to_message and update.message.reply_to_message.text and "A message from the Bot Admin" in update.message.reply_to_message.text:
+        await log_user_activity(user, "[Reply to Admin]", context.bot)
+        reply_text = f"🗣️ <b>New Reply from User:</b>\n\n<b>From:</b> {user.first_name} (<code>{user.id}</code>)\n<b>Message:</b> <i>{update.message.text}</i>\n\nTo reply, use <code>/msg {user.id} [your message]</code>"
+        for admin_id in ADMIN_USERS:
+            try: await context.application.bot.send_message(chat_id=admin_id, text=reply_text, parse_mode=ParseMode.HTML)
+            except Exception as e: logger.error(f"Failed to forward reply to admin {admin_id}: {e}")
+        await update.message.reply_text("✅ Your reply has been sent to the admins.")
+async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    await log_user_activity(user, "/stats", context.bot)
+    user_info = USER_INFO_CACHE.get(str(user.id), {})
+    command_count = user_info.get('command_count', 0)
+    approved_date_str = user_info.get('approved_date')
+    stats_message = f"📊 <b>Your Personal Bot Stats</b>\n\n<b>Name:</b> {user.first_name}\n<b>Commands Used:</b> {command_count}\n"
+    if approved_date_str:
+        approved_date = datetime.fromisoformat(approved_date_str)
+        days_since = (datetime.now(pytz.utc) - approved_date).days
+        stats_message += f"<b>Member Since:</b> {approved_date.strftime('%B %d, %Y')} ({days_since} days ago)\n"
+    
+    status_line = "<b>Status:</b> ✅ Standard User"
+    if str(user.id) in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(str(user.id), '1970-01-01T00:00:00+00:00')) > datetime.now(pytz.utc):
+        vip_exp_date = datetime.fromisoformat(VIP_USERS[str(user.id)])
+        status_line = f"<b>Status:</b> ⭐ VIP (Expires: {vip_exp_date.strftime('%B %d, %Y')})"
+    
+    stats_message += status_line
+    await update.message.reply_html(stats_message)
+async def check_for_updates(context: ContextTypes.DEFAULT_TYPE):
+    application = context.job.data
+    global LAST_KNOWN_VERSION
+    if BOT_VERSION != LAST_KNOWN_VERSION:
+        logger.info(f"Version change detected! New: {BOT_VERSION}, Old: {LAST_KNOWN_VERSION}")
+        if LAST_KNOWN_VERSION != "":
+            update_message = f"🚀 <b>A new version (v{BOT_VERSION}) is available!</b>\n\nPlease ask an admin to update your session to get the latest features and improvements."
+            for chat_id, tracker_data in list(ACTIVE_TRACKERS.items()):
+                if tracker_data.get('version') != BOT_VERSION:
+                    try: await application.bot.send_animation(chat_id=chat_id, animation=UPDATE_GIF_URL, caption=update_message, parse_mode=ParseMode.HTML)
+                    except Exception as e: logger.error(f"Failed to send update notice to {chat_id}: {e}")
+        version_filepath = os.path.join(DATA_DIR, "version.txt")
+        with open(version_filepath, "w") as f: f.write(BOT_VERSION)
+        LAST_KNOWN_VERSION = BOT_VERSION
+async def send_welcome_video(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    processing_msg = None
+    try:
+        processing_msg = await context.bot.send_message(chat_id=chat_id, text="🎁 Preparing your welcome video...")
+        ydl_opts = {'format': 'best[ext=mp4][height<=720]/best[ext=mp4]/best','outtmpl': f'{chat_id}_welcome_video.%(ext)s','quiet': True}
+        loop = asyncio.get_running_loop()
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = await loop.run_in_executor(None, lambda: ydl.extract_info(WELCOME_VIDEO_URL, download=True))
+            filename = ydl.prepare_filename(info).replace('.webm', '.mp4')
+        caption_text = "✨ <b>Welcome to the GAG Stock Alerter!</b> ✨\n\nThis video is a small token to welcome you to our community. I'm here to help you track all the latest items.\n\nType /help to see all available commands."
+        with open(filename, 'rb') as video_file:
+            await context.bot.send_video(chat_id=chat_id, video=video_file, caption=caption_text, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.error(f"Failed to send welcome video to {chat_id}: {e}")
+        await context.bot.send_message(chat_id=chat_id, text="Sorry, I couldn't prepare your welcome video, but you have full access to the bot!")
+    finally:
+        if processing_msg: await processing_msg.delete()
+        if 'filename' in locals() and os.path.exists(filename): os.remove(filename)
 
 def register_handlers(app: Application):
-    """This function registers all handlers to a given application instance."""
     all_handlers = {
-        # User Commands
         "start": start_cmd, "stop": stop_cmd, "refresh": refresh_cmd, "next": next_cmd,
         "registerbot": register_bot_cmd, "help": help_cmd, "mute": mute_cmd, "unmute": unmute_cmd,
         "recent": recent_cmd, "listprized": listprized_cmd, "stats": stats_cmd, "requestvip": requestvip_cmd,
-        # Admin Commands
         "admin": admin_cmd, "approvebot": approve_bot_cmd, "uptime": uptime_cmd, "deploy": deploy_cmd,
         "approve": approve_cmd, "addadmin": add_admin_cmd, "msg": msg_cmd,
         "adminlist": adminlist_cmd, "addprized": addprized_cmd, "delprized": delprized_cmd,
@@ -515,18 +839,15 @@ def register_handlers(app: Application):
     app.add_handler(CallbackQueryHandler(self_update_callback, pattern='^self_update_session$'))
     app.add_handler(MessageHandler(filters.REPLY, reply_handler))
     
-    # Run check for updates only for the main bot
     if app.bot.token == TOKEN:
-        app.job_queue.run_once(check_for_updates, 15)
+        app.job_queue.run_once(check_for_updates, 15, data=app)
 
 async def run_bot(app: Application):
-    """Starts a single bot instance."""
     try:
         await app.initialize()
         await app.start()
         await app.updater.start_polling()
         logger.info(f"Bot @{app.bot.username} is running.")
-        # Keep the task alive
         await asyncio.Event().wait()
     except Exception as e:
         logger.critical(f"Failed to start or run bot @{app.bot.username}: {e}")
@@ -536,7 +857,6 @@ async def run_bot(app: Application):
             await app.stop()
 
 async def main_async():
-    """The main entry point for the bot factory."""
     if not TOKEN or not BOT_OWNER_ID: 
         logger.critical("Main bot TOKEN and BOT_OWNER_ID are not set!"); 
         return
@@ -550,6 +870,8 @@ async def main_async():
     bot_tasks = []
     for token in unique_tokens:
         try:
+            bot_instance = Bot(token)
+            await bot_instance.get_me()
             application = Application.builder().token(token).build()
             register_handlers(application)
             bot_tasks.append(run_bot(application))
@@ -562,7 +884,6 @@ async def main_async():
 
     logger.info(f"Bot Factory [v{BOT_VERSION}] is starting {len(bot_tasks)} bot(s)...")
     await asyncio.gather(*bot_tasks)
-
 
 if __name__ == '__main__':
     try:
