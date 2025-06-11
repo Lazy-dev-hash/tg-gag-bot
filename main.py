@@ -9,7 +9,6 @@ import json
 from datetime import datetime, timedelta
 import pytz
 import httpx
-from functools import partial
 
 from flask import Flask, render_template_string, request, session, redirect, url_for
 from threading import Thread
@@ -26,7 +25,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '12.0.2') # Weather & Uptime Update
+BOT_VERSION = os.environ.get('BOT_VERSION', '12.0.3') # Next Restock & Weather Fix
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
@@ -43,6 +42,7 @@ ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
 AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS = set(), set(), set(), set(), set()
 LAST_KNOWN_VERSION, USER_INFO_CACHE, VIP_USERS, VIP_REQUESTS, CUSTOM_COMMANDS = "", {}, {}, {}, {}
 BOT_START_TIME = datetime.now(pytz.utc)
+PHT = pytz.timezone('Asia/Manila')
 
 # --- LOGGING SETUP ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -91,53 +91,21 @@ async def log_user_activity(user: User, command: str, bot: Bot):
     avatar_url = "https://i.imgur.com/jpfrJd3.png"
     try:
         user_id_str = str(user.id)
-        # Check if cache needs refreshing (more than 1 hour old)
         if user_id_str not in USER_INFO_CACHE or (datetime.now(pytz.utc) - datetime.fromisoformat(USER_INFO_CACHE[user_id_str].get('timestamp', '1970-01-01T00:00:00+00:00'))).total_seconds() > 3600:
             p_photos = await bot.get_user_profile_photos(user.id, limit=1)
             avatar_path = (await p_photos.photos[0][0].get_file()).file_path if p_photos and p_photos.photos and p_photos.photos[0] else None
-            
-            # Preserve existing data like command_count and approved_date
             existing_info = USER_INFO_CACHE.get(user_id_str, {})
-            USER_INFO_CACHE[user_id_str] = {
-                'first_name': user.first_name, 'username': user.username or "N/A", 'avatar_path': avatar_path,
-                'timestamp': datetime.now(pytz.utc).isoformat(),
-                'command_count': existing_info.get('command_count', 0),
-                'approved_date': existing_info.get('approved_date')
-            }
-
+            USER_INFO_CACHE[user_id_str] = {'first_name': user.first_name, 'username': user.username or "N/A", 'avatar_path': avatar_path, 'timestamp': datetime.now(pytz.utc).isoformat(), 'command_count': existing_info.get('command_count', 0), 'approved_date': existing_info.get('approved_date')}
         user_info = USER_INFO_CACHE[user_id_str]
-        user_info['command_count'] = user_info.get('command_count', 0) + 1 # Increment command count
+        user_info['command_count'] = user_info.get('command_count', 0) + 1
         if user_info.get('avatar_path'): avatar_url = f"https://api.telegram.org/file/bot{TOKEN}/{user_info['avatar_path']}"
-        
         activity_log = {"user_id": user.id, "first_name": user_info['first_name'], "username": user_info['username'], "command": command, "timestamp": datetime.now(pytz.utc).isoformat(), "avatar_url": avatar_url}
         USER_ACTIVITY.insert(0, activity_log); del USER_ACTIVITY[50:]
         save_json_to_file("user_info.json", USER_INFO_CACHE)
     except Exception as e: logger.warning(f"Could not log activity for {user.id}. Error: {e}")
 
 # --- HELPER & CORE BOT FUNCTIONS ---
-PHT = pytz.timezone('Asia/Manila')
 def get_ph_time()->datetime: return datetime.now(PHT)
-def get_countdown(target: datetime) -> str:
-    now = get_ph_time(); time_left = target - now
-    if time_left.total_seconds() <= 0: return "Restocked!"
-    total_seconds = int(time_left.total_seconds()); h, m, s = total_seconds // 3600, (total_seconds % 3600) // 60, total_seconds % 60
-    return f"{h:02}h {m:02}m {s:02}s"
-def get_all_restock_timers() -> dict:
-    now = get_ph_time(); timers = {}
-    next_egg = now.replace(second=0, microsecond=0)
-    if now.minute < 30: next_egg = next_egg.replace(minute=30)
-    else: next_egg = (next_egg + timedelta(hours=1)).replace(minute=0)
-    timers['Egg'] = get_countdown(next_egg)
-    next_5 = now.replace(second=0, microsecond=0); next_m = (now.minute // 5 + 1) * 5
-    if next_m >= 60: next_5 = (next_5 + timedelta(hours=1)).replace(minute=0)
-    else: next_5 = next_5.replace(minute=next_m)
-    timers['Gear'] = timers['Seed'] = get_countdown(next_5)
-    next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0); timers['Honey'] = get_countdown(next_hour)
-    next_7 = now.replace(minute=0, second=0, microsecond=0); next_7h = (now.hour // 7 + 1) * 7
-    if next_7h >= 24: next_7 = (next_7 + timedelta(days=1)).replace(hour=next_7h % 24)
-    else: next_7 = next_7.replace(hour=next_7h)
-    timers['Cosmetics'] = get_countdown(next_7)
-    return timers
 def format_value(val: int) -> str:
     if val >= 1_000_000: return f"x{val / 1_000_000:.1f}M"
     if val >= 1_000: return f"x{val / 1_000:.1f}K"
@@ -145,6 +113,49 @@ def format_value(val: int) -> str:
 def add_emoji(name: str) -> str:
     emojis = {"Common Egg": "🥚", "Uncommon Egg": "🐣", "Rare Egg": "🍳", "Legendary Egg": "🪺", "Mythical Egg": "🥚", "Bug Egg": "🪲", "Watering Can": "🚿", "Trowel": "🛠️", "Recall Wrench": "🔧", "Basic Sprinkler": "💧", "Advanced Sprinkler": "💦", "Godly Sprinkler": "⛲", "Lightning Rod": "⚡", "Master Sprinkler": "🌊", "Favorite Tool": "❤️", "Harvest Tool": "🌾", "Carrot": "🥕", "Strawberry": "🍓", "Blueberry": "🫐", "Orange Tulip": "🌷", "Tomato": "🍅", "Corn": "🌽", "Daffodil": "🌼", "Watermelon": "🍉", "Pumpkin": "🎃", "Apple": "🍎", "Bamboo": "🎍", "Coconut": "🥥", "Cactus": "🌵", "Dragon Fruit": "🍈", "Mango": "🥭", "Grape": "🍇", "Mushroom": "🍄", "Pepper": "🌶️", "Cacao": "🍫", "Beanstalk": "🌱", "Ember Lily": "🔥"}
     return f"{emojis.get(name, '❔')} {name}"
+def format_timedelta(td: timedelta, short=False) -> str:
+    total_seconds = int(td.total_seconds())
+    days, remainder = divmod(total_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    parts = []
+    if days > 0: parts.append(f"{days}d")
+    if hours > 0: parts.append(f"{hours}h")
+    if minutes > 0: parts.append(f"{minutes}m")
+    if not short or not parts: parts.append(f"{seconds}s")
+    return " ".join(parts) if parts else "0s"
+def calculate_next_restock_times() -> dict[str, datetime]:
+    now = get_ph_time()
+    next_times = {}
+    
+    # 5-minute cycle (Gear, Seed)
+    next_5_min = now.replace(second=0, microsecond=0)
+    next_minute_val = (now.minute // 5 + 1) * 5
+    if next_minute_val >= 60: next_5_min = (next_5_min + timedelta(hours=1)).replace(minute=0)
+    else: next_5_min = next_5_min.replace(minute=next_minute_val)
+    next_times["Gear"] = next_times["Seed"] = next_5_min
+
+    # 30-minute cycle (Egg)
+    next_egg_min = now.replace(second=0, microsecond=0)
+    if now.minute < 30: next_egg_min = next_egg_min.replace(minute=30)
+    else: next_egg_min = (next_egg_min + timedelta(hours=1)).replace(minute=0)
+    next_times["Egg"] = next_egg_min
+    
+    # Hourly cycle (Honey)
+    next_times["Honey"] = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+    
+    # 7-hour cycle (Cosmetics)
+    restock_hours = [0, 7, 14, 21]
+    next_cosmetic_time = now.replace(minute=0, second=0, microsecond=0)
+    for h in restock_hours:
+        if now.hour < h:
+            next_cosmetic_time = next_cosmetic_time.replace(hour=h)
+            break
+    else: # If all hours have passed for today
+        next_cosmetic_time = (next_cosmetic_time + timedelta(days=1)).replace(hour=0)
+    next_times["Cosmetics"] = next_cosmetic_time
+    
+    return next_times
 def format_category_message(category_name: str, items: list, restock_timer: str) -> str:
     header_emojis = {"Gear": "🛠️", "Seed": "🌱", "Egg": "🥚", "Cosmetics": "🎨", "Honey": "🍯"}
     header = f"{header_emojis.get(category_name, '📦')} <b>Grow A Garden — {category_name} Stock</b>"
@@ -154,17 +165,6 @@ def format_weather_message(weather_data: dict) -> str:
     icon = weather_data.get("icon", "❓")
     name = weather_data.get("name", "Unknown")
     return f"{icon} <b>Current Weather:</b> {name}"
-def format_timedelta(td: timedelta) -> str:
-    total_seconds = int(td.total_seconds())
-    days, remainder = divmod(total_seconds, 86400)
-    hours, remainder = divmod(remainder, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    parts = []
-    if days > 0: parts.append(f"{days}d")
-    if hours > 0: parts.append(f"{hours}h")
-    if minutes > 0: parts.append(f"{minutes}m")
-    if seconds > 0 or not parts: parts.append(f"{seconds}s")
-    return " ".join(parts)
 async def send_music_vm(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     try:
         ydl_opts = {'format': 'bestaudio/best', 'outtmpl': f'{chat_id}_%(title)s.%(ext)s', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}], 'quiet': True}
@@ -179,11 +179,10 @@ async def fetch_all_data() -> dict | None:
             stock_res.raise_for_status(); weather_res.raise_for_status()
             stock_data_raw, weather_data_raw = stock_res.json()['data'], weather_res.json()
             
-            weather_info = weather_data_raw.get('data', weather_data_raw)
-            all_data = {
-                "stock": {},
-                "weather": {"name": weather_info.get("name", "Unknown"), "icon": weather_info.get("icon", "❓")}
-            }
+            # Robust weather parsing
+            weather_info_source = weather_data_raw.get('data') if isinstance(weather_data_raw.get('data'), dict) else weather_data_raw
+            
+            all_data = {"stock": {}, "weather": {"name": weather_info_source.get("name", "Unknown"), "icon": weather_info_source.get("icon", "❓")}}
             for cat, details in stock_data_raw.items():
                 if 'items' in details: all_data["stock"][cat.capitalize()] = [{'name': item['name'], 'value': int(item['quantity'])} for item in details.get('items', [])]
             return all_data
@@ -211,7 +210,6 @@ async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TY
             new_prized = {item['name'].lower() for cat in new_data.get('stock', {}).values() for item in cat}
             just_appeared = new_prized - old_prized
             prized_items_in_stock = just_appeared.intersection(PRIZED_ITEMS)
-
             if prized_items_in_stock and not is_muted:
                 item_details = [item for cat in new_data['stock'].values() for item in cat if item['name'].lower() in prized_items_in_stock]
                 alert_list = "\n".join([f"› {add_emoji(i['name'])}: {format_value(i['value'])}" for i in item_details])
@@ -226,8 +224,11 @@ async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TY
                     if not is_muted:
                         items_to_show = [item for item in new_items if not filters or any(f in item['name'].lower() for f in filters)]
                         if items_to_show:
-                            restock_timers = get_all_restock_timers()
-                            category_message = format_category_message(category_name, items_to_show, restock_timers.get(category_name, "N/A"))
+                            next_restock_times = calculate_next_restock_times()
+                            time_left = next_restock_times.get(category_name, get_ph_time()) - get_ph_time()
+                            countdown_str = format_timedelta(time_left, short=True)
+                            
+                            category_message = format_category_message(category_name, items_to_show, countdown_str)
                             alert_message = f"🔄 <b>{category_name} has been updated!</b>"
                             try: await bot.send_message(chat_id, text=alert_message, parse_mode=ParseMode.HTML); await bot.send_message(chat_id, text=category_message, parse_mode=ParseMode.HTML)
                             except Exception as e: logger.error(f"Failed category alert to {chat_id}: {e}")
@@ -262,8 +263,7 @@ def dashboard_route():
             active_users.append({'first_name': user_info['first_name'], 'username': user_info['username'], 'avatar_url': avatar_url, 'is_muted': tracker_data['is_muted']})
     for log in USER_ACTIVITY:
         time_diff = datetime.now(pytz.utc) - datetime.fromisoformat(log['timestamp'])
-        time_ago = format_timedelta(time_diff)
-        display_activity.append({**log, "time_ago": time_ago})
+        display_activity.append({**log, "time_ago": format_timedelta(time_diff)})
     stats = {"active_trackers": len(ACTIVE_TRACKERS), "authorized_users": len(AUTHORIZED_USERS), "admins": len(ADMIN_USERS)}
     return render_template_string(DASHBOARD_HTML, activity=display_activity, stats=stats, active_users=active_users)
 @app.route('/logout')
@@ -273,28 +273,27 @@ def logout_route(): session.pop('logged_in', None); return redirect(url_for('log
 async def send_full_stock_report(update: Update, context: ContextTypes.DEFAULT_TYPE, filters: list[str]):
     loader_message = await update.message.reply_text("⏳ Fetching all stock categories...")
     data = await fetch_all_data()
-    if not data:
-        await loader_message.edit_text("⚠️ Could not fetch data.")
-        return None
+    if not data: await loader_message.edit_text("⚠️ Could not fetch data."); return None
     
     weather_report = format_weather_message(data.get("weather", {}))
     await context.bot.send_message(update.effective_chat.id, text=weather_report, parse_mode=ParseMode.HTML)
     await asyncio.sleep(0.3)
-        
-    restock_timers = get_all_restock_timers(); sent_anything = False
+    
+    next_restock_times = calculate_next_restock_times()
+    now = get_ph_time()
+    sent_anything = False
     for category_name, items in data["stock"].items():
         items_to_show = [item for item in items if not filters or any(f in item['name'].lower() for f in filters)]
         if items_to_show:
             sent_anything = True
-            category_message = format_category_message(category_name, items_to_show, restock_timers.get(category_name, "N/A"))
+            time_left = next_restock_times.get(category_name, now) - now
+            countdown_str = format_timedelta(time_left, short=True)
+            category_message = format_category_message(category_name, items_to_show, countdown_str)
             await context.bot.send_message(update.effective_chat.id, text=category_message, parse_mode=ParseMode.HTML)
-    
-    if not sent_anything and filters:
-        await context.bot.send_message(update.effective_chat.id, text="Your filter didn't match any items.")
-        
+
+    if not sent_anything and filters: await context.bot.send_message(update.effective_chat.id, text="Your filter didn't match any items.")
     await loader_message.delete()
-    if sent_anything:
-        await send_music_vm(context, update.effective_chat.id)
+    if sent_anything: await send_music_vm(context, update.effective_chat.id)
     return data
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user; await log_user_activity(user, "/start", context.bot)
@@ -329,6 +328,33 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id, text=f"✅ ⭐ <b>VIP Tracking Activated!</b>\nYou'll get automatic notifications for stock changes.", parse_mode=ParseMode.HTML)
     else:
         await update.message.reply_text("This command starts automatic background tracking for <b>VIP members</b>.\n\nAs a regular user, you can use /refresh to check stock at any time.\n\nTo become a VIP, you can <code>/requestvip</code>.", parse_mode=ParseMode.HTML)
+async def next_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
+    await log_user_activity(user, "/next", context.bot)
+
+    now = get_ph_time()
+    next_times = calculate_next_restock_times()
+    
+    schedule_lines = []
+    category_emojis = {"Seed": "🌱", "Gear": "🛠️", "Egg": "🥚", "Honey": "🍯", "Cosmetics": "🎨"}
+
+    # Order the categories for display
+    ordered_categories = ["Seed", "Gear", "Egg", "Honey", "Cosmetics"]
+
+    for category in ordered_categories:
+        if category in next_times:
+            next_time = next_times[category]
+            time_left = next_time - now
+            
+            emoji = category_emojis.get(category, "❓")
+            time_str = next_time.strftime('%I:%M:%S %p')
+            countdown_str = format_timedelta(time_left, short=True)
+            
+            schedule_lines.append(f"{emoji} <b>{category}:</b> <code>{time_str}</code> (in {countdown_str})")
+
+    message = "🗓️ <b>Next Restock Schedule</b>\n<i>(Philippine Time, PHT)</i>\n\n" + "\n".join(schedule_lines)
+    await update.message.reply_html(message)
 
 # --- ADMIN COMMANDS ---
 async def uptime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -350,13 +376,11 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_to_use = update.message
     if hasattr(update, 'callback_query') and update.callback_query:
         message_to_use = update.callback_query.message
-        try:
-            await message_to_use.edit_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+        try: await message_to_use.edit_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup, parse_mode=ParseMode.HTML)
         except Exception as e:
             logger.warning(f"Could not edit message for admin panel, sending new one. Error: {e}")
-            await context.bot.send_message(chat_id=user.id, text=f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup, parse_mode=ParseMode.HTML)
-    else:
-        await message_to_use.reply_text(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action from the menu below.", reply_markup=reply_markup)
+            await context.bot.send_message(chat_id=user.id, text=f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action.", reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+    else: await message_to_use.reply_html(f"👑 <b>{ADMIN_PANEL_TITLE}</b>\n\nSelect an action.", reply_markup=reply_markup)
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
     admin_id = query.from_user.id
@@ -408,7 +432,9 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text(text); await asyncio.sleep(2); await admin_cmd(update, context)
         return
     if action == "stats":
-        text = f"📊 <b>Bot Statistics</b>\n\n- <b>Authorized Users:</b> {len(AUTHORIZED_USERS)}\n- <b>VIP Members:</b> {len([uid for uid, exp in VIP_USERS.items() if datetime.fromisoformat(exp) > datetime.now(pytz.utc)])}\n- <b>Admins:</b> {len(ADMIN_USERS)}\n- <b>Active Trackers:</b> {len(ACTIVE_TRACKERS)}\n- <b>Banned Users:</b> {len(BANNED_USERS)}\n- <b>Restricted Users:</b> {len(RESTRICTED_USERS)}\n- <b>Recent Activities Logged:</b> {len(USER_ACTIVITY)}"
+        uptime_delta = datetime.now(pytz.utc) - BOT_START_TIME
+        uptime_str = format_timedelta(uptime_delta)
+        text = f"📊 <b>Bot Statistics</b>\n\n- <b>Uptime:</b> {uptime_str}\n- <b>Authorized Users:</b> {len(AUTHORIZED_USERS)}\n- <b>VIP Members:</b> {len([uid for uid, exp in VIP_USERS.items() if datetime.fromisoformat(exp) > datetime.now(pytz.utc)])}\n- <b>Admins:</b> {len(ADMIN_USERS)}\n- <b>Active Trackers:</b> {len(ACTIVE_TRACKERS)}\n- <b>Banned Users:</b> {len(BANNED_USERS)}\n- <b>Restricted Users:</b> {len(RESTRICTED_USERS)}\n- <b>Recent Activities Logged:</b> {len(USER_ACTIVITY)}"
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data='admin_main')]]), parse_mode=ParseMode.HTML)
     elif action == "prized":
         message = "💎 <b>Current Prized Items:</b>\n\n" + ("\n".join([f"• <code>{item}</code>" for item in sorted(list(PRIZED_ITEMS))]) or "The list is empty.")
@@ -548,7 +574,7 @@ async def access_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await log_user_activity(admin, f"[VIP Granted for {target_id}]", context.bot)
     else:
         await update.message.reply_text("❌ Invalid or expired VIP ticket code.")
-async def requestvip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE): # RESTORED
+async def requestvip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
     await log_user_activity(user, "/requestvip", context.bot)
@@ -635,7 +661,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id not in AUTHORIZED_USERS: await update.message.reply_text("You need to be approved to use this bot. Send /start to begin the approval process."); return
     await log_user_activity(user, "/help", context.bot)
     is_vip = str(user.id) in VIP_USERS and datetime.fromisoformat(VIP_USERS.get(str(user.id), '1970-01-01T00:00:00+00:00')) > datetime.now(pytz.utc)
-    guide = f"📘 <b>GAG Stock Alerter Guide</b> (v{BOT_VERSION})\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › " + ("Starts VIP background tracking." if is_vip else "Shows current stock.") + "\n🔄  <b>/refresh</b> › Manually shows current stock.\n📈  <b>/recent</b> › Shows recent items.\n📊  <b>/stats</b> › View your personal bot usage stats.\n💎  <b>/listprized</b> › Shows the prized items list.\n"
+    guide = f"📘 <b>GAG Stock Alerter Guide</b> (v{BOT_VERSION})\n\n<b><u>👤 User Commands</u></b>\n▶️  <b>/start</b> › " + ("Starts VIP background tracking." if is_vip else "Shows current stock.") + "\n🔄  <b>/refresh</b> › Manually shows current stock.\n🗓️  <b>/next</b> › Shows the next restock schedule.\n📈  <b>/recent</b> › Shows recent items.\n📊  <b>/stats</b> › View your personal bot usage stats.\n💎  <b>/listprized</b> › Shows the prized items list.\n"
     if not is_vip: guide += "⭐  <b>/requestvip</b> › Request a ticket for VIP status.\n"
     if is_vip: guide += "🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles VIP notifications.\n⏹️  <b>/stop</b> › Stops the VIP tracker completely.\n"
     guide += "✨  <b>/update</b> › Restarts your session to the latest bot version.\n\n"
@@ -652,8 +678,6 @@ async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await context.bot.send_message(chat_id=admin_id, text=reply_text, parse_mode=ParseMode.HTML)
             except Exception as e: logger.error(f"Failed to forward reply to admin {admin_id}: {e}")
         await update.message.reply_text("✅ Your reply has been sent to the admins.")
-    elif update.message.reply_to_message and update.message.reply_to_message.caption and "A new version" in update.message.reply_to_message.caption:
-        await update_cmd(update, context)
 async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
@@ -721,7 +745,7 @@ def main():
     application = Application.builder().token(TOKEN).build()
     
     # User Commands
-    application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd)); application.add_handler(CommandHandler("stats", stats_cmd)); application.add_handler(CommandHandler("requestvip", requestvip_cmd))
+    application.add_handler(CommandHandler("start", start_cmd)); application.add_handler(CommandHandler("stop", stop_cmd)); application.add_handler(CommandHandler("refresh", refresh_cmd)); application.add_handler(CommandHandler("next", next_cmd)); application.add_handler(CommandHandler("help", help_cmd)); application.add_handler(CommandHandler("mute", mute_cmd)); application.add_handler(CommandHandler("unmute", unmute_cmd)); application.add_handler(CommandHandler("recent", recent_cmd)); application.add_handler(CommandHandler("listprized", listprized_cmd)); application.add_handler(CommandHandler("update", update_cmd)); application.add_handler(CommandHandler("stats", stats_cmd)); application.add_handler(CommandHandler("requestvip", requestvip_cmd))
     # Admin Commands
     application.add_handler(CommandHandler("admin", admin_cmd)); application.add_handler(CommandHandler("uptime", uptime_cmd)); application.add_handler(CommandHandler("approve", approve_cmd)); application.add_handler(CommandHandler("addadmin", add_admin_cmd)); application.add_handler(CommandHandler("msg", msg_cmd)); application.add_handler(CommandHandler("adminlist", adminlist_cmd)); application.add_handler(CommandHandler("addprized", addprized_cmd)); application.add_handler(CommandHandler("delprized", delprized_cmd)); application.add_handler(CommandHandler("restart", restart_cmd)); application.add_handler(CommandHandler("broadcast", broadcast_cmd)); application.add_handler(CommandHandler("extendvip", extendvip_cmd)); application.add_handler(CommandHandler("access", access_cmd)); application.add_handler(CommandHandler("addcommand", addcommand_cmd)); application.add_handler(CommandHandler("delcommand", delcommand_cmd)); application.add_handler(CommandHandler("listcommands", listcommands_cmd))
     # Handlers
@@ -729,7 +753,7 @@ def main():
     application.add_handler(MessageHandler(filters.REPLY, reply_handler))
     
     application.job_queue.run_once(check_for_updates, 5)
-    logger.info("Bot [Diamond Edition] is running...")
+    logger.info(f"Bot [v{BOT_VERSION}] is running...")
     application.run_polling()
 
 if __name__ == '__main__':
