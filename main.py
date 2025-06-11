@@ -790,8 +790,13 @@ def main():
         except Exception as e:
             logger.error(f"Failed to register child bot @{bot_data['username']} with token {bot_token[:8]}...: {e}")
 
-    # Register all handlers. They will apply to the main bot and all child bots.
-    user_commands = ["start", "stop", "refresh", "next", "register_bot", "help", "mute", "unmute", "recent", "listprized", "update", "stats", "requestvip"]
+    # --- CORRECTED COMMAND HANDLER REGISTRATION ---
+    # The string in the list MUST match the function name prefix (with underscores).
+    # The CommandHandler will automatically create the user-facing command without underscores.
+    user_commands = [
+        "start", "stop", "refresh", "next", "register_bot", "help", "mute", 
+        "unmute", "recent", "listprized", "update", "stats", "requestvip"
+    ]
     user_handlers = [CommandHandler(cmd.replace('_', ''), globals()[f"{cmd}_cmd"]) for cmd in user_commands]
     application.add_handlers(user_handlers)
     
