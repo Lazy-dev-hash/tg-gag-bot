@@ -25,7 +25,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN') # Token for the main "Hub" bot
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '15.0.1') # Final Stable Architecture
+BOT_VERSION = os.environ.get('BOT_VERSION', '15.0.2') # Final Stable Architecture
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 BOT_CREATOR_NAME = os.environ.get('BOT_CREATOR_NAME', 'Sunnel')
 
@@ -48,6 +48,7 @@ PHT = pytz.timezone('Asia/Manila')
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
 # --- PERSISTENT STORAGE ---
 def load_json_from_file(filename, default_type=dict):
@@ -742,7 +743,7 @@ async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.reply_to_message and update.message.reply_to_message.text and "A message from the Bot Admin" in update.message.reply_to_message.text:
         await log_user_activity(user, "[Reply to Admin]", context.bot)
         reply_text = f"🗣️ <b>New Reply from User:</b>\n\n<b>From:</b> {user.first_name} (<code>{user.id}</code>)\n<b>Message:</b> <i>{update.message.text}</i>\n\nTo reply, use <code>/msg {user.id} [your message]</code>"
-        main_bot = context.application.bot_data.get(TOKEN)
+        main_bot = context.application.bot_data[TOKEN]
         if main_bot:
             for admin_id in ADMIN_USERS:
                 try: await main_bot.send_message(chat_id=admin_id, text=reply_text, parse_mode=ParseMode.HTML)
@@ -752,14 +753,11 @@ async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
     if admin.id not in ADMIN_USERS: return
     await log_user_activity(admin, "/update", context.bot)
-    await update.message.reply_text("🔁 Hot-reloading all bot instances with the latest code... Please wait.")
-    main_task = context.application.bot_data.get('main_task')
-    if main_task:
-        main_task.cancel()
-    else:
-        await update.message.reply_text("Could not find main task to cancel. Falling back to hard restart.")
-        await restart_cmd(update, context)
-
+    await update.message.reply_text("🔁 Hot-reloading all bot instances with the latest code... This may take a moment.")
+    
+    # This will trigger the main loop in `main()` to stop and restart
+    context.application.bot_data['main_task'].cancel()
+    
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
@@ -830,11 +828,11 @@ async def main_async():
         return
     load_all_data()
     
-    # Start Flask in a separate thread
+    # Run Flask in a separate thread
     flask_thread = Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': int(os.environ.get('PORT', 8080))}, daemon=True)
     flask_thread.start()
     logger.info(f"Flask server started. Dashboard is available.")
-
+    
     # A single application to manage all bots
     application = Application.builder().token(TOKEN).build()
     
@@ -844,9 +842,12 @@ async def main_async():
         application.bot_data[token] = Bot(token)
         logger.info(f"Prepared child bot: {bot_data['name']} (@{bot_data['username']})")
     
+    # Store the main task so /update can cancel it
+    application.bot_data['main_task'] = asyncio.current_task()
+    
     register_handlers(application)
     
-    logger.info(f"Bot Factory [v{BOT_VERSION}] is running with {len(application.bot_data)} bot instance(s)...")
+    logger.info(f"Bot Factory [v{BOT_VERSION}] is running with {len(application.bot_data)-1} bot instance(s)...")
     
     # Run the single application
     await application.run_polling()
@@ -855,7 +856,11 @@ async def main_async():
 if __name__ == '__main__':
     try:
         asyncio.run(main_async())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot shutting down...")
+    except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+        logger.info("Bot shutting down or restarting...")
     except Exception as e:
         logger.critical(f"A critical error occurred in main execution: {e}")
+        
+    # This part will be reached on cancellation (e.g., from /update)
+    logger.info("Restarting script...")
+    os.execv(sys.executable, ['python'] + sys.argv)
