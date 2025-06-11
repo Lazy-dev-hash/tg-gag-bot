@@ -26,7 +26,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN') # Token for the main "Hub" bot
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '15.1.0') # Final, stable version
+BOT_VERSION = os.environ.get('BOT_VERSION', '15.1.1') # Stable with startup fix
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 BOT_CREATOR_NAME = os.environ.get('BOT_CREATOR_NAME', 'Sunnel')
 RENDER_DEPLOY_HOOK_URL = os.environ.get('RENDER_DEPLOY_HOOK_URL')
@@ -52,7 +52,6 @@ logger = logging.getLogger(__name__)
 
 # --- PERSISTENT STORAGE ---
 def get_data_filepath(filename):
-    """Ensures the data directory exists and returns the full file path."""
     os.makedirs(DATA_DIR, exist_ok=True)
     return os.path.join(DATA_DIR, filename)
 
@@ -319,7 +318,6 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     if hasattr(update, 'callback_query') and update.callback_query:
-        # This is from a button press, likely self_update_callback
         pass
     elif context.bot.token in CHILD_BOTS and user.id == CHILD_BOTS[context.bot.token]["owner_id"]:
         if not context.user_data.get('has_received_child_welcome'):
@@ -842,7 +840,6 @@ async def self_update_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     await query.message.edit_text("⚙️ Updating your session... Please wait.")
     tracker_info['task'].cancel()
-    # Create a mock update object to reinvoke the /start command handler
     mock_chat = type('MockChat', (), {'id': user.id, 'type': 'private'})()
     mock_message = type('MockMessage', (), {'from_user': user, 'chat': mock_chat, 'reply_text': query.message.reply_text, 'reply_html': query.message.reply_html,'delete': query.message.delete, 'text': '/start'})()
     mock_update = type('MockUpdate', (), {'effective_user': user, 'message': mock_message, 'effective_chat': mock_chat, 'callback_query': query})
@@ -884,7 +881,6 @@ async def update_and_redeploy_handler(update: Update, context: ContextTypes.DEFA
         if os.path.exists(temp_script_name): os.remove(temp_script_name)
 
 async def handle_post_update_notifications(app: Application):
-    """Checks for an update flag on startup and notifies users if found."""
     update_flag_path = get_data_filepath('update_flag.json')
     if not os.path.exists(update_flag_path): return
 
@@ -930,11 +926,12 @@ def register_handlers(app: Application):
 async def run_bot(app: Application):
     """Initializes and runs a single bot instance."""
     try:
-        logger.info(f"Starting bot @{app.bot.username}...")
+        # ### FIX: Initialization must happen BEFORE accessing bot properties. ###
         await app.initialize()
+        logger.info(f"Starting bot @{app.bot.username}...")
         await app.run_polling()
     except Exception as e:
-        logger.critical(f"FATAL: Bot @{app.bot.username} crashed. Error: {e}")
+        logger.critical(f"FATAL: Bot crashed during startup or runtime. Error: {e}")
     finally:
         if app.running:
             logger.info(f"Shutting down bot @{app.bot.username}...")
