@@ -26,7 +26,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN')
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '12.0.1') # Final Bugfix
+BOT_VERSION = os.environ.get('BOT_VERSION', '13.0.0')
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 RENDER_API_KEY = os.environ.get('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.environ.get('RENDER_SERVICE_ID')
@@ -183,7 +183,7 @@ async def tracking_loop(chat_id: int, bot: Bot, context: ContextTypes.DEFAULT_TY
                         items_to_show = [item for item in new_items if not filters or any(f in item['name'].lower() for f in filters)]
                         if items_to_show:
                             restock_timers = get_all_restock_timers()
-                            category_message = format_category_message(category_name, items_to_show, restock_timers.get(category_name, "N/A"), "")
+                            category_message = format_category_message(category_name, items_to_show, restock_timers.get(category_name, "N/A"))
                             alert_message = f"🔄 <b>{category_name} has been updated!</b>"
                             try: await bot.send_message(chat_id, text=alert_message, parse_mode=ParseMode.HTML); await bot.send_message(chat_id, text=category_message, parse_mode=ParseMode.HTML)
                             except Exception as e: logger.error(f"Failed category alert to {chat_id}: {e}")
@@ -642,6 +642,18 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         vip_exp_date = datetime.fromisoformat(VIP_USERS[str(user.id)])
         stats_message += f"<b>Status:</b> ⭐ VIP (Expires: {vip_exp_date.strftime('%B %d, %Y')})"
     await update.message.reply_html(stats_message)
+async def check_for_updates(application: Application):
+    global LAST_KNOWN_VERSION
+    if BOT_VERSION != LAST_KNOWN_VERSION:
+        logger.info(f"Version change detected! New: {BOT_VERSION}, Old: {LAST_KNOWN_VERSION}")
+        if LAST_KNOWN_VERSION != "":
+            update_message = f"🚀 <b>A new version (v{BOT_VERSION}) is available!</b>\n\nI've been upgraded with new features and improvements.\n\nTo get the latest version, you can use the /update command."
+            for chat_id, tracker_data in list(ACTIVE_TRACKERS.items()):
+                try: await application.bot.send_animation(chat_id=chat_id, animation=UPDATE_GIF_URL, caption=update_message, parse_mode=ParseMode.HTML)
+                except Exception as e: logger.error(f"Failed to send update notice to {chat_id}: {e}")
+        version_filepath = os.path.join(DATA_DIR, "version.txt")
+        with open(version_filepath, "w") as f: f.write(BOT_VERSION)
+        LAST_KNOWN_VERSION = BOT_VERSION
 async def send_welcome_video(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     processing_msg = None
     try:
@@ -660,18 +672,6 @@ async def send_welcome_video(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     finally:
         if processing_msg: await processing_msg.delete()
         if 'filename' in locals() and os.path.exists(filename): os.remove(filename)
-async def check_for_updates(application: Application):
-    global LAST_KNOWN_VERSION
-    if BOT_VERSION != LAST_KNOWN_VERSION:
-        logger.info(f"Version change detected! New: {BOT_VERSION}, Old: {LAST_KNOWN_VERSION}")
-        if LAST_KNOWN_VERSION != "":
-            update_message = f"🚀 <b>A new version (v{BOT_VERSION}) is available!</b>\n\nI've been upgraded with new features and improvements.\n\nTo get the latest version, you can use the /update command."
-            for chat_id, tracker_data in list(ACTIVE_TRACKERS.items()):
-                try: await application.bot.send_animation(chat_id=chat_id, animation=UPDATE_GIF_URL, caption=update_message, parse_mode=ParseMode.HTML)
-                except Exception as e: logger.error(f"Failed to send update notice to {chat_id}: {e}")
-        version_filepath = os.path.join(DATA_DIR, "version.txt")
-        with open(version_filepath, "w") as f: f.write(BOT_VERSION)
-        LAST_KNOWN_VERSION = BOT_VERSION
 
 def main():
     if not TOKEN or not BOT_OWNER_ID: logger.critical("Required environment variables are not set!"); return
