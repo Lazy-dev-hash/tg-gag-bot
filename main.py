@@ -25,7 +25,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN') # Token for the main "Hub" bot
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '13.0.0') # Bot Factory & Stability
+BOT_VERSION = os.environ.get('BOT_VERSION', '13.0.1') # Stability Patch
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 BOT_CREATOR_NAME = os.environ.get('BOT_CREATOR_NAME', 'Sunnel')
 
@@ -56,18 +56,27 @@ def load_json_from_file(filename, default_type=dict):
     try:
         with open(filepath, 'r') as f: return json.load(f)
     except (json.JSONDecodeError, ValueError): return default_type()
+
 def save_json_to_file(filename, data):
     filepath = os.path.join(DATA_DIR, filename)
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(filepath, 'w') as f: json.dump(data, f, indent=4)
+
+def load_set_from_file(filename): # <<< THIS WAS THE MISSING FUNCTION
+    filepath = os.path.join(DATA_DIR, filename)
+    if not os.path.exists(filepath): return set()
+    with open(filepath, 'r') as f: return {line.strip() for line in f if line.strip()}
+
 def load_int_set_from_file(filename):
     filepath = os.path.join(DATA_DIR, filename);
     if not os.path.exists(filepath): return set()
     with open(filepath, 'r') as f: return {int(line.strip()) for line in f if line.strip().isdigit()}
+
 def save_to_file(filename, data_set):
     filepath = os.path.join(DATA_DIR, filename); os.makedirs(DATA_DIR, exist_ok=True)
     with open(filepath, 'w') as f:
         for item in data_set: f.write(f"{item}\n")
+
 def load_all_data():
     global AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS, LAST_KNOWN_VERSION, VIP_USERS, CUSTOM_COMMANDS, VIP_REQUESTS, USER_INFO_CACHE, CHILD_BOTS, BOT_REGISTRATION_REQUESTS
     AUTHORIZED_USERS = load_int_set_from_file("authorized_users.txt"); ADMIN_USERS = load_int_set_from_file("admins.txt")
@@ -696,7 +705,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_vip: guide += "🔇  <b>/mute</b> & 🔊 <b>/unmute</b> › Toggles VIP notifications.\n⏹️  <b>/stop</b> › Stops the VIP tracker completely.\n"
     guide += "✨  <b>/update</b> › Restarts your session to the latest bot version.\n\n"
     if user.id in ADMIN_USERS: guide += "<b><u>🛡️ Admin Commands</u></b>\n👑  <b>/admin</b> › Opens the main admin panel.\n🤖  <b>/approvebot</b> <code>[code]</code> › Approves a new user bot.\n🕒  <b>/uptime</b> › Shows the bot's current running time.\n📢  <b>/broadcast</b> <code>[msg]</code> › Send a message to all users.\n✉️  <b>/msg</b> <code>[id] [msg]</code> › Sends a message to a user.\n✅  <b>/approve</b> <code>[id]</code> › Authorizes a new user.\n🎟️  <b>/access</b> <code>[ticket]</code> › Grants VIP using a ticket code.\n⏳  <b>/extendvip</b> <code>[id] [days]</code> › Extends a user's VIP.\n➕  <b>/addprized</b> <code>[item]</code> › Adds to prized list.\n➖  <b>/delprized</b> <code>[item]</code> › Removes from prized list.\n🚀  <b>/restart</b> › Restarts the bot process.\n"
-    await update.message.reply_text(guide, parse_mode=ParseMode.HTML)
+    await update.message.reply_html(guide)
 async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id in BANNED_USERS or user.id not in AUTHORIZED_USERS: return
@@ -769,8 +778,11 @@ async def send_welcome_video(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         if 'filename' in locals() and os.path.exists(filename): os.remove(filename)
 
 def main():
-    if not TOKEN or not BOT_OWNER_ID: logger.critical("Main bot TOKEN and BOT_OWNER_ID are not set!"); return
+    if not TOKEN or not BOT_OWNER_ID: 
+        logger.critical("Main bot TOKEN and BOT_OWNER_ID are not set!"); 
+        return
     load_all_data()
+    
     Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': int(os.environ.get('PORT', 8080))}, daemon=True).start()
     
     application = Application.builder().token(TOKEN).build()
@@ -784,17 +796,14 @@ def main():
             logger.error(f"Failed to register child bot @{bot_data['username']} with token {bot_token[:8]}...: {e}")
 
     # Register all handlers. They will apply to the main bot and all child bots.
-    # User Commands
     user_commands = ["start", "stop", "refresh", "next", "registerbot", "help", "mute", "unmute", "recent", "listprized", "update", "stats", "requestvip"]
     user_handlers = [CommandHandler(cmd, globals()[f"{cmd}_cmd"]) for cmd in user_commands]
     application.add_handlers(user_handlers)
     
-    # Admin Commands
     admin_commands = ["admin", "approvebot", "uptime", "approve", "addadmin", "msg", "adminlist", "addprized", "delprized", "restart", "broadcast", "extendvip", "access", "addcommand", "delcommand", "listcommands"]
     admin_handlers = [CommandHandler(cmd, globals()[f"{cmd}_cmd"]) for cmd in admin_commands]
     application.add_handlers(admin_handlers)
     
-    # Other Handlers
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     application.add_handler(MessageHandler(filters.REPLY, reply_handler))
     
