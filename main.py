@@ -25,7 +25,7 @@ ADMIN_PASS = os.environ.get('ADMIN_PASS', 'password')
 
 TOKEN = os.environ.get('TOKEN') # Token for the main "Hub" bot
 BOT_OWNER_ID = int(os.environ.get('BOT_OWNER_ID', 0))
-BOT_VERSION = os.environ.get('BOT_VERSION', '14.0.0') # Dynamic Updates & Instant Activation
+BOT_VERSION = os.environ.get('BOT_VERSION', '15.0.0') # Stable Bot Factory & Dynamic Updates
 ADMIN_PANEL_TITLE = os.environ.get('ADMIN_PANEL_TITLE', 'Bot Control Panel')
 BOT_CREATOR_NAME = os.environ.get('BOT_CREATOR_NAME', 'Sunnel')
 
@@ -41,13 +41,13 @@ ACTIVE_TRACKERS, LAST_SENT_DATA, USER_ACTIVITY = {}, {}, []
 AUTHORIZED_USERS, ADMIN_USERS, BANNED_USERS, RESTRICTED_USERS, PRIZED_ITEMS = set(), set(), set(), set(), set()
 LAST_KNOWN_VERSION, USER_INFO_CACHE, VIP_USERS, VIP_REQUESTS, CUSTOM_COMMANDS = "", {}, {}, {}, {}
 CHILD_BOTS, BOT_REGISTRATION_REQUESTS = {}, {}
-RUNNING_BOT_TASKS = {} # Stores running asyncio tasks for each bot
 BOT_START_TIME = datetime.now(pytz.utc)
 PHT = pytz.timezone('Asia/Manila')
 
 # --- LOGGING SETUP ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # --- PERSISTENT STORAGE ---
 def load_json_from_file(filename, default_type=dict):
@@ -252,7 +252,6 @@ def dashboard_route():
     for user_id, tracker_data in ACTIVE_TRACKERS.items():
         user_info = USER_INFO_CACHE.get(str(user_id))
         if user_info:
-            # We use the main bot's token for dashboard avatars
             avatar_url = f"https://api.telegram.org/file/bot{TOKEN}/{user_info['avatar_path']}" if user_info.get('avatar_path') else "https://i.imgur.com/jpfrJd3.png"
             active_users.append({'first_name': user_info['first_name'], 'username': user_info['username'], 'avatar_url': avatar_url, 'is_muted': tracker_data['is_muted']})
     for log in USER_ACTIVITY:
@@ -391,15 +390,12 @@ async def approve_bot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     del BOT_REGISTRATION_REQUESTS[request_code]
     save_json_to_file("bot_registrations.json", BOT_REGISTRATION_REQUESTS)
     
-    # Start the new bot dynamically
-    await start_single_bot(bot_token)
-    
-    await update.message.reply_html(f"✅ <b>Success!</b>\n\nYou have approved and instantly activated @{bot_username}.")
+    await update.message.reply_html(f"✅ <b>Success!</b>\n\nYou have approved @{bot_username}.\n\nTo activate it, please run <code>/update</code> to hot-reload all bots.")
     
     congrats_message = (
-        f"🎉 <b>Congratulations, {request_data['user_first_name']}!</b> 🎉\n\n"
-        f"Your bot, <b>{bot_name}</b>, has been approved and is now online!\n\n"
-        f"➡️ <b>Click here to start:</b> https://t.me/{bot_username}\n\n"
+        f"🎉 <b>Bot Approved!</b> 🎉\n\n"
+        f"Congratulations, {request_data['user_first_name']}! Your bot, <b>{bot_name}</b>, has been approved.\n\n"
+        f"An admin will now perform a system update to bring your bot online. You will receive a notification with the link once it's active!\n\n"
         f"<i>This bot was created by <b>{BOT_CREATOR_NAME}</b>.</i>"
     )
     
@@ -600,7 +596,7 @@ async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
     if admin.id not in ADMIN_USERS: return
     await log_user_activity(admin, "/restart", context.bot)
-    await update.message.reply_text("🚀 Gracefully restarting the bot now...")
+    await update.message.reply_text("🚀 Hard-restarting the bot process now...")
     os.execv(sys.executable, ['python'] + sys.argv)
 async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
@@ -611,10 +607,12 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     broadcast_message = f"📣 <b>Broadcast from Admin:</b>\n\n<i>{message_to_send}</i>"
     sent_count = 0
     await update.message.reply_text(f"Sending broadcast to {len(AUTHORIZED_USERS)} users...")
-    for user_id in AUTHORIZED_USERS:
-        if user_id not in BANNED_USERS:
-            try: await context.application.bot.send_message(chat_id=user_id, text=broadcast_message, parse_mode=ParseMode.HTML); sent_count += 1; await asyncio.sleep(0.1)
-            except Exception as e: logger.error(f"Failed to send broadcast to {user_id}: {e}")
+    main_bot = context.application.bot_data.get(TOKEN)
+    if main_bot:
+        for user_id in AUTHORIZED_USERS:
+            if user_id not in BANNED_USERS:
+                try: await main_bot.send_message(chat_id=user_id, text=broadcast_message, parse_mode=ParseMode.HTML); sent_count += 1; await asyncio.sleep(0.1)
+                except Exception as e: logger.error(f"Failed to send broadcast to {user_id}: {e}")
     await update.message.reply_text(f"✅ Broadcast complete. Message sent to {sent_count} users.")
 async def extendvip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
@@ -675,7 +673,7 @@ async def addcommand_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not name.isalnum(): await update.message.reply_text("❌ Command name can only contain letters and numbers."); return
         if permission not in ["user", "admin", "both"]: await update.message.reply_text("❌ Permission must be 'user', 'admin', or 'both'."); return
         CUSTOM_COMMANDS[name] = {"response": response, "permission": permission}; save_json_to_file("custom_commands.json", CUSTOM_COMMANDS)
-        await update.message.reply_text(f"✅ Custom command `/{name}` created!\n\nUse /restart for the new command to become active.", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(f"✅ Custom command `/{name}` created!\n\nUse /update for the new command to become active.", parse_mode=ParseMode.HTML)
     except (IndexError, ValueError): await update.message.reply_text("⚠️ Usage: <code>/addcommand [name] [permission] [response]</code>\n\n- <b>Permission</b> can be: user, admin, or both.", parse_mode=ParseMode.HTML)
 async def delcommand_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
@@ -685,7 +683,7 @@ async def delcommand_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         name = context.args[0].lower()
         if name in CUSTOM_COMMANDS:
             del CUSTOM_COMMANDS[name]; save_json_to_file("custom_commands.json", CUSTOM_COMMANDS)
-            await update.message.reply_text(f"🗑️ Custom command `/{name}` deleted.\n\nUse /restart for this change to take effect.", parse_mode=ParseMode.HTML)
+            await update.message.reply_text(f"🗑️ Custom command `/{name}` deleted.\n\nUse /update for this change to take effect.", parse_mode=ParseMode.HTML)
         else: await update.message.reply_text(f"❌ Command `/{name}` not found.")
     except IndexError: await update.message.reply_text("⚠️ Usage: <code>/delcommand [name]</code>", parse_mode=ParseMode.HTML)
 async def listcommands_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -759,7 +757,7 @@ async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
     if admin.id not in ADMIN_USERS: return
     await log_user_activity(admin, "/update", context.bot)
-    await update.message.reply_text("🔄 Hot-reloading all bot instances with the latest code... Please wait.")
+    await update.message.reply_text("🔁 Hot-reloading all bot instances with the latest code... This may take a moment.")
     
     # This will trigger the main loop in `main_async` to stop and restart
     main_task = context.application.bot_data.get('main_task')
@@ -767,6 +765,7 @@ async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         main_task.cancel()
     else:
         # Fallback to hard restart if the task isn't found
+        await update.message.reply_text("Could not find main task to cancel. Falling back to hard restart.")
         await restart_cmd(update, context)
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -796,11 +795,9 @@ async def check_for_updates(context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Version change detected! New: {BOT_VERSION}, Old: {LAST_KNOWN_VERSION}")
         if LAST_KNOWN_VERSION != "":
             update_message = f"🚀 <b>A new version (v{BOT_VERSION}) is available!</b>\n\nClick the button below to update your session and get the latest features and improvements."
-            keyboard = [[InlineKeyboardButton("✨ Get Latest Version", callback_data=f"user_update_session_{{user_id}}")]]
             for chat_id, tracker_data in list(ACTIVE_TRACKERS.items()):
                 if tracker_data.get('version') != BOT_VERSION:
                     try:
-                        # Create user-specific button
                         user_keyboard = [[InlineKeyboardButton("✨ Get Latest Version", callback_data=f"user_update_session_{chat_id}")]]
                         await app.bot.send_animation(
                             chat_id=chat_id, animation=UPDATE_GIF_URL, 
@@ -828,14 +825,20 @@ def register_handlers(app: Application):
     for cmd_name, func in handlers.items():
         app.add_handler(CommandHandler(cmd_name, func))
     
-    app.add_handler(CallbackQueryHandler(admin_callback_handler)) # Catches all callbacks now
+    app.add_handler(CallbackQueryHandler(admin_callback_handler))
     app.add_handler(MessageHandler(filters.REPLY, reply_handler))
     app.job_queue.run_once(check_for_updates, 15, data=app)
 
-async def run_bot_instance(token: str):
+async def run_bot_instance(token: str, is_main: bool = False):
     """Initializes and runs a single bot application."""
     application = Application.builder().token(token).build()
-    application.bot_data[TOKEN] = application.bot # Make main bot accessible
+    if is_main:
+        # Store all bot objects in the main bot's data for easy access
+        all_bots = {bot_data["username"]: Bot(bot_token) for bot_token, bot_data in CHILD_BOTS.items()}
+        all_bots[application.bot.username] = application.bot
+        application.bot_data[TOKEN] = application.bot # Main bot reference
+        application.bot_data["all_bots"] = all_bots
+
     register_handlers(application)
     
     task = asyncio.create_task(application.run_polling())
@@ -843,53 +846,45 @@ async def run_bot_instance(token: str):
     logger.info(f"Bot with token ending in ...{token[-4:]} started successfully.")
     await task
 
-async def start_single_bot(token: str):
-    """Starts a new bot instance dynamically."""
-    if token in RUNNING_BOT_TASKS and not RUNNING_BOT_TASKS[token].done():
-        logger.warning(f"Bot with token ...{token[-4:]} is already running.")
-        return
-    task = asyncio.create_task(run_bot_instance(token))
-    RUNNING_BOT_TASKS[token] = task
-
-async def stop_all_bots():
-    """Stops all running bot instances."""
-    for token, task in RUNNING_BOT_TASKS.items():
-        if not task.done():
-            logger.info(f"Stopping bot with token ...{token[-4:]}")
-            task.cancel()
-    RUNNING_BOT_TASKS.clear()
-
 async def main_loop():
     """The main loop that manages all bot processes."""
     while True:
         load_all_data()
-        all_tokens = [TOKEN] + list(CHILD_BOTS.keys())
         
-        bot_tasks = [run_bot_instance(token) for token in all_tokens]
+        # This will now include the main bot token and all child bot tokens
+        all_tokens = {TOKEN} | set(CHILD_BOTS.keys())
+        
+        bot_tasks = [run_bot_instance(token, is_main=(token == TOKEN)) for token in all_tokens]
         
         logger.info(f"Bot Factory [v{BOT_VERSION}] is starting {len(bot_tasks)} bot instance(s)...")
         
+        # Store the main gather task so /update can cancel it
         main_task = asyncio.gather(*bot_tasks)
-        # Store the main task so /update can cancel it
-        if bot_tasks:
-            bot_tasks[0].get_coro().cr_frame.f_locals['application'].bot_data['main_task'] = main_task
         
+        # A bit of a hack to make the main_task accessible from any bot's context
+        if bot_tasks:
+            app_for_context = next(iter(bot_tasks)).get_coro().cr_frame.f_locals['application']
+            app_for_context.bot_data['main_task'] = main_task
+
         try:
             await main_task
         except asyncio.CancelledError:
-            logger.info("Update command received. Restarting all bot processes...")
-            await stop_all_bots()
+            logger.info("Update command received or process interrupted. Restarting all bot processes...")
+            for task in RUNNING_BOT_TASKS.values():
+                if not task.done():
+                    task.cancel()
+            RUNNING_BOT_TASKS.clear()
             await asyncio.sleep(2) # Give time for tasks to fully cancel
 
 def main():
     if not TOKEN or not BOT_OWNER_ID: 
-        logger.critical("Main bot TOKEN and BOT_OWNER_ID are not set!"); 
+        logger.critical("Main bot TOKEN and BOT_OWNER_ID are not set!")
         return
     
-    # Run Flask in a separate thread
+    # Run Flask in a separate thread, ensuring it only starts once
     flask_thread = Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': int(os.environ.get('PORT', 8080))}, daemon=True)
     flask_thread.start()
-    logger.info(f"Flask server started. Dashboard is available.")
+    logger.info("Flask server started. Dashboard is available.")
 
     # Run the main asynchronous loop
     try:
